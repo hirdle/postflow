@@ -26,17 +26,7 @@ Issue labels to use: `backend`, `frontend`, `bug`, `enhancement`, `infra`.
 
 ### Branches
 
-Branch naming: `feature/<short-name>`, `fix/<short-name>`, `infra/<short-name>`.
-
-Always create a branch from `main` before starting work:
-
-```bash
-git checkout -b feature/<name> main
-```
-
-### Pull Requests
-
-Link PRs to issues using `Closes #N` in PR body. PRs auto-attach to Project #5 when linked to project issues.
+All work is done directly on `main`. No feature branches or PRs — commit straight to main.
 
 ### Project Board Statuses
 

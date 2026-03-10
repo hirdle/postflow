@@ -26,17 +26,14 @@ Issue labels to use: `backend`, `frontend`, `bug`, `enhancement`, `infra`.
 
 ### Branches
 
-Branch naming: `feature/<short-name>`, `fix/<short-name>`, `infra/<short-name>`.
+All work is done directly on `main`. No feature branches or PRs — commit straight to main.
 
-Always create a branch from `main` before starting work:
+### Commits
 
-```bash
-git checkout -b feature/<name> main
-```
+After each completed issue:
 
-### Pull Requests
-
-Link PRs to issues using `Closes #N` in PR body. PRs auto-attach to Project #5 when linked to project issues.
+1. Create a dedicated git commit for that task immediately.
+2. Only after the commit, update the issue/project status to `Done`.
 
 ### Project Board Statuses
 
@@ -84,7 +81,7 @@ postflow/
 │   └── publish.db     # SQLite (statuses, attempts, settings)
 ├── mcps/              # Legacy MCP code (migration source, will be deleted)
 ├── docker-compose.yml
-├── AGENTS.md
+├── CLAUDE.md
 └── PRD.md
 ```
 
