@@ -5,6 +5,8 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Callable
 
+import aiosqlite
+
 from app.config import get_settings
 from app.core.media import MediaStorage
 from app.core.posts import ValidationIssue, parse_post_file, validate_post
@@ -106,19 +108,16 @@ class PublishService:
             )
             raise DuplicatePublishError(error_message)
 
+        record_id = await self._reserve_publish_record(post, payload.schedule)
         try:
             record = await self._publish_to_platform(post, schedule=payload.schedule)
         except Exception as exc:
-            failure_message = str(exc)
-            failure_record = PublishRecord(
-                file_name=post.file_name,
-                platform=platform,
-                scheduled_date=post.date if payload.schedule else None,
-                scheduled_time=post.time if payload.schedule else None,
-                status="failed",
+            failure_message = _describe_publish_error(exc)
+            await self.repository.update_status(
+                record_id,
+                "failed",
                 error=failure_message,
             )
-            failure_record_id = await self.repository.add(failure_record)
             await self.repository.log_attempt(
                 post.file_name,
                 "publish",
@@ -126,13 +125,24 @@ class PublishService:
                 {
                     "status": "failure",
                     "error": failure_message,
-                    "record_id": failure_record_id,
+                    "record_id": record_id,
                 },
             )
-            raise
+            raise RuntimeError(failure_message) from exc
 
-        record_id = await self.repository.add(record)
-        stored_record = record.model_copy(update={"id": record_id})
+        await self.repository.update_status(
+            record_id,
+            record.status,
+            message_id=record.message_id,
+            poll_message_id=record.poll_message_id,
+            published_at=record.published_at,
+            error="",
+        )
+        stored_record = await self.repository.get(record_id)
+        if stored_record is None:
+            raise RuntimeError(
+                f"Publish record {record_id} could not be reloaded after publish."
+            )
         await self.repository.log_attempt(
             post.file_name,
             "publish",
@@ -170,10 +180,11 @@ class PublishService:
         try:
             await self._cancel_platform_record(record)
         except Exception as exc:
+            failure_message = _describe_publish_error(exc)
             await self.repository.update_status(
                 record_id,
                 "failed",
-                error=str(exc),
+                error=failure_message,
             )
             await self.repository.log_attempt(
                 record.file_name,
@@ -181,10 +192,10 @@ class PublishService:
                 {"record_id": record_id},
                 {
                     "status": "failure",
-                    "error": str(exc),
+                    "error": failure_message,
                 },
             )
-            raise
+            raise RuntimeError(failure_message) from exc
 
         await self.repository.update_status(
             record_id,
@@ -239,10 +250,11 @@ class PublishService:
         try:
             await self._cancel_platform_record(record)
         except Exception as exc:
+            failure_message = _describe_publish_error(exc)
             await self.repository.update_status(
                 record_id,
                 "failed",
-                error=str(exc),
+                error=failure_message,
             )
             await self.repository.log_attempt(
                 record.file_name,
@@ -250,18 +262,19 @@ class PublishService:
                 payload.model_dump(),
                 {
                     "status": "failure",
-                    "error": str(exc),
+                    "error": failure_message,
                 },
             )
-            raise
+            raise RuntimeError(failure_message) from exc
 
         try:
             refreshed_record = await self._publish_to_platform(post, schedule=True)
         except Exception as exc:
+            failure_message = _describe_publish_error(exc)
             await self.repository.update_status(
                 record_id,
                 "failed",
-                error=str(exc),
+                error=failure_message,
             )
             await self.repository.log_attempt(
                 record.file_name,
@@ -269,10 +282,10 @@ class PublishService:
                 payload.model_dump(),
                 {
                     "status": "failure",
-                    "error": str(exc),
+                    "error": failure_message,
                 },
             )
-            raise
+            raise RuntimeError(failure_message) from exc
 
         if refreshed_record.message_id is None:
             raise RuntimeError("Rescheduled publish did not return a message id.")
@@ -412,6 +425,42 @@ class PublishService:
 
         raise ValueError(f"Unsupported platform: {record.platform}")
 
+    async def _reserve_publish_record(
+        self,
+        post: Any,
+        schedule: bool,
+    ) -> int:
+        reserved_record = PublishRecord(
+            file_name=post.file_name,
+            platform=post.platform,
+            scheduled_date=post.date if schedule else None,
+            scheduled_time=post.time if schedule else None,
+            status="scheduled" if schedule else "published",
+        )
+
+        try:
+            return await self.repository.add(reserved_record)
+        except aiosqlite.IntegrityError as exc:
+            error_message = (
+                f"Post {post.file_name} is already tracked as scheduled/published "
+                f"for {post.platform}."
+            )
+            await self.repository.log_attempt(
+                post.file_name,
+                "publish",
+                {
+                    "schedule": schedule,
+                    "platform": post.platform,
+                    "date": post.date,
+                    "time": post.time,
+                },
+                {
+                    "status": "duplicate",
+                    "error": error_message,
+                },
+            )
+            raise DuplicatePublishError(error_message) from exc
+
 
 def _resolve_post_path(file_name: str) -> Path:
     if Path(file_name).name != file_name or not file_name.endswith(".md"):
@@ -437,3 +486,17 @@ async def _close_client(client: Any, method_name: str) -> None:
     result = getattr(client, method_name)()
     if isawaitable(result):
         await result
+
+
+def _describe_publish_error(exc: Exception) -> str:
+    if isinstance(exc, (DuplicatePublishError, ScheduleStateError, ValueError)):
+        return str(exc)
+    if isinstance(exc, FileNotFoundError):
+        return "Required post or media asset was not found."
+    if isinstance(exc, TimeoutError):
+        return "Platform request timed out."
+
+    message = " ".join(str(exc).split())
+    if not message or "traceback" in message.lower():
+        return "Platform request failed."
+    return message

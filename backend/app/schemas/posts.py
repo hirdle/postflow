@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.posts.models import PlatformName, PostDraftData, PostModel, PublishStatus
+from app.schemas.publishing import PublishAttempt, PublishRecord
 
 
 class PostListItem(BaseModel):
@@ -23,6 +24,8 @@ class PostListItem(BaseModel):
 class PostDetail(PostModel):
     status: PublishStatus = "draft"
     raw_markdown: str
+    publish_records: list[PublishRecord] = Field(default_factory=list)
+    publish_attempts: list[PublishAttempt] = Field(default_factory=list)
 
 
 class PostCreate(PostDraftData):

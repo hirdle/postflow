@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiFetch, buildApiUrl } from "../api/client";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
+import { PublicationStatusPanel } from "../components/PublicationStatusPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
 import type {
@@ -725,6 +726,9 @@ export function PostEditorPage() {
   const generatedImageName = filename
     ? `${filename.replace(/\.md$/, "")}.png`
     : "Draft image";
+  const publicationStatus = postQuery.data?.status ?? formValues.status;
+  const publishRecords = postQuery.data?.publish_records ?? [];
+  const publishAttempts = postQuery.data?.publish_attempts ?? [];
 
   return (
     <div className="space-y-6">
@@ -748,7 +752,7 @@ export function PostEditorPage() {
 
           <div className="flex flex-col gap-3 lg:items-end">
             <div className="flex flex-wrap gap-2">
-              <StatusBadge status={formValues.status} />
+              <StatusBadge status={publicationStatus} />
               <PlatformBadge platform={formValues.platform} />
               <PresenceBadge label="Unsaved" active={isDirty} />
               <PresenceBadge label="Image" active={formValues.hasImage} />
@@ -815,6 +819,13 @@ export function PostEditorPage() {
             data-editor-dirty={isDirty ? "true" : "false"}
             data-beforeunload-armed={isDirty ? "true" : "false"}
           >
+            <PublicationStatusPanel
+              fileName={filename}
+              status={publicationStatus}
+              publishRecords={publishRecords}
+              publishAttempts={publishAttempts}
+            />
+
             <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
               <div className="border-b border-white/10 pb-4">
                 <h3 className="text-xl font-semibold text-white">Metadata</h3>

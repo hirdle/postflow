@@ -24,6 +24,8 @@ async def cancel_schedule(record_id: int) -> Response:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ScheduleStateError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -46,6 +48,8 @@ async def reschedule_post(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (PublishValidationError, ScheduleStateError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=502,

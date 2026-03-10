@@ -31,6 +31,29 @@ export interface PollData {
   options: string[];
 }
 
+export interface PublishRecord {
+  id: number | null;
+  file_name: string;
+  platform: Platform;
+  scheduled_date: string | null;
+  scheduled_time: string | null;
+  message_id: number | null;
+  poll_message_id: number | null;
+  status: PublishStatus;
+  published_at: string | null;
+  error: string | null;
+  created_at: string | null;
+}
+
+export interface PublishAttempt {
+  id: number | null;
+  file_name: string;
+  attempt_type: string;
+  payload_snapshot: string | null;
+  result: string | null;
+  created_at: string | null;
+}
+
 export interface PostDetail extends PostListItem {
   hook_type: string | null;
   body: string | null;
@@ -39,6 +62,8 @@ export interface PostDetail extends PostListItem {
   poll: PollData | null;
   image_prompt: string | null;
   raw_markdown: string;
+  publish_records: PublishRecord[];
+  publish_attempts: PublishAttempt[];
 }
 
 export interface ValidationIssue {

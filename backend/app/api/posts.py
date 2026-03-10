@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.config import get_platform_policy, get_settings
 from app.core.posts import PostModel, parse_post_file, serialize_post
 from app.core.publishing import StatusRepository
+from app.schemas.publishing import PublishAttempt, PublishRecord
 from app.schemas.posts import PostCreate, PostDetail, PostListItem, PostUpdate
 
 router = APIRouter(prefix="/posts", tags=["posts"])
@@ -77,8 +78,16 @@ async def get_post(filename: str) -> PostDetail:
     post_path = _resolve_post_path(filename)
     raw_markdown = post_path.read_text(encoding="utf-8")
     post = parse_post_file(post_path)
-    current_status = await _get_current_status(filename)
-    return _to_post_detail(post, raw_markdown, current_status)
+    current_status, publish_records, publish_attempts = await _get_post_activity(
+        filename
+    )
+    return _to_post_detail(
+        post,
+        raw_markdown,
+        current_status,
+        publish_records,
+        publish_attempts,
+    )
 
 
 @router.post(
@@ -111,7 +120,16 @@ async def create_post(payload: PostCreate) -> PostDetail:
     post_path = settings.posts_dir / file_name
     post_path.write_text(raw_markdown, encoding="utf-8")
 
-    return _to_post_detail(post, raw_markdown, "draft")
+    current_status, publish_records, publish_attempts = await _get_post_activity(
+        file_name
+    )
+    return _to_post_detail(
+        post,
+        raw_markdown,
+        current_status,
+        publish_records,
+        publish_attempts,
+    )
 
 
 @router.put("/{filename}", response_model=PostDetail)
@@ -129,8 +147,16 @@ async def update_post(filename: str, payload: PostUpdate) -> PostDetail:
     post_path.write_text(raw_markdown, encoding="utf-8")
 
     reparsed = parse_post_file(post_path)
-    current_status = await _get_current_status(filename)
-    return _to_post_detail(reparsed, raw_markdown, current_status)
+    current_status, publish_records, publish_attempts = await _get_post_activity(
+        filename
+    )
+    return _to_post_detail(
+        reparsed,
+        raw_markdown,
+        current_status,
+        publish_records,
+        publish_attempts,
+    )
 
 
 async def _build_status_map() -> dict[str, str]:
@@ -144,12 +170,14 @@ async def _build_status_map() -> dict[str, str]:
     return status_map
 
 
-async def _get_current_status(file_name: str) -> str:
+async def _get_post_activity(
+    file_name: str,
+) -> tuple[str, list[PublishRecord], list[PublishAttempt]]:
     repository = StatusRepository()
     records = await repository.find(file_name)
-    if not records:
-        return "draft"
-    return records[0].status
+    attempts = await repository.get_attempts(file_name)
+    current_status = records[0].status if records else "draft"
+    return current_status, records, attempts
 
 
 def _resolve_post_path(filename: str) -> Path:
@@ -174,9 +202,17 @@ def _generate_file_name(posts_dir: Path, date: str, platform: str) -> str:
     return f"{prefix}{next_number:02d}.md"
 
 
-def _to_post_detail(post: PostModel, raw_markdown: str, current_status: str) -> PostDetail:
+def _to_post_detail(
+    post: PostModel,
+    raw_markdown: str,
+    current_status: str,
+    publish_records: list[PublishRecord],
+    publish_attempts: list[PublishAttempt],
+) -> PostDetail:
     return PostDetail(
         **post.model_dump(),
         status=current_status,
         raw_markdown=raw_markdown,
+        publish_records=publish_records,
+        publish_attempts=publish_attempts,
     )

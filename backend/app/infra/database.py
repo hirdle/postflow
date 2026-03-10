@@ -41,6 +41,11 @@ CREATE_TABLE_STATEMENTS = (
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_records_active_unique
+    ON publish_records (file_name, platform)
+    WHERE status IN ('scheduled', 'published')
+    """,
 )
 
 
