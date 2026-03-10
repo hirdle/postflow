@@ -15,11 +15,14 @@ class PreviewRequest(PostDraftData):
 
 
 class PreviewResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     rendered_text: str
     poll: PollData | None = None
-    validation_issues: list[ValidationIssue] = Field(default_factory=list)
+    validation_issues: list[ValidationIssue] = Field(
+        default_factory=list,
+        serialization_alias="validation",
+    )
     char_count: int
     platform: PlatformName | None = None
     normalized_post: PostModel

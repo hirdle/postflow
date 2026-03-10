@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 PlatformName = Literal["telegram", "vk"]
 PublishStatus = Literal["draft", "scheduled", "published", "failed", "cancelled"]
@@ -53,14 +53,16 @@ class PollData(BaseModel):
 class PostDraftData(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
-        populate_by_name=True,
         str_strip_whitespace=True,
     )
 
     date: str | None = None
     time: str | None = None
     platform: PlatformName | None = None
-    post_type: str | None = Field(default=None, alias="type")
+    post_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("type", "post_type"),
+    )
     rubric: str | None = None
     hook_type: str | None = None
     title: str | None = None
