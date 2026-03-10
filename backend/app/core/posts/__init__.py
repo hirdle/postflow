@@ -11,6 +11,7 @@ from app.core.posts.models import (
 )
 from app.core.posts.parser import parse_post_content, parse_post_file
 from app.core.posts.serializer import serialize_post
+from app.core.posts.validation import ValidationIssue, validate_post
 
 __all__ = [
     "OPTION_COUNT_ERROR",
@@ -20,7 +21,9 @@ __all__ = [
     "PostModel",
     "PublishStatus",
     "ValidationLevel",
+    "ValidationIssue",
     "parse_post_content",
     "parse_post_file",
     "serialize_post",
+    "validate_post",
 ]

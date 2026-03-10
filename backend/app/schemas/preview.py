@@ -7,17 +7,8 @@ from app.core.posts.models import (
     PollData,
     PostDraftData,
     PostModel,
-    ValidationLevel,
 )
-
-
-class ValidationIssue(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    level: ValidationLevel
-    code: str
-    message: str
-
+from app.core.posts.validation import ValidationIssue
 
 class PreviewRequest(PostDraftData):
     file_name: str | None = None
