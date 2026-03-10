@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../api/client";
+import { useToast } from "../components/ToastProvider";
 import type { SettingsFormValues } from "../types";
 
 const SECRET_FIELDS = new Set<keyof SettingsFormValues>([
@@ -102,15 +103,15 @@ const SECTION_FIELDS: Array<{
   },
 ];
 
-type ToastState =
-  | { tone: "success" | "error"; message: string }
-  | null;
-
 function normalizeSettings(values: Partial<SettingsFormValues> | undefined) {
-  return {
-    ...EMPTY_FORM,
-    ...values,
-  };
+  const normalized = { ...EMPTY_FORM };
+
+  for (const key of Object.keys(EMPTY_FORM) as Array<keyof SettingsFormValues>) {
+    const candidate = values?.[key];
+    normalized[key] = typeof candidate === "string" ? candidate : "";
+  }
+
+  return normalized;
 }
 
 export function SettingsPage() {
@@ -118,7 +119,7 @@ export function SettingsPage() {
   const [formValues, setFormValues] = useState<SettingsFormValues>(EMPTY_FORM);
   const [initialValues, setInitialValues] = useState<SettingsFormValues>(EMPTY_FORM);
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
-  const [toast, setToast] = useState<ToastState>(null);
+  const { pushToast } = useToast();
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
@@ -146,7 +147,7 @@ export function SettingsPage() {
       queryClient.setQueryData(["settings"], normalized);
       setFormValues(normalized);
       setInitialValues(normalized);
-      setToast({
+      pushToast({
         tone: "success",
         message: "Settings saved and reloaded from backend.",
       });
@@ -154,7 +155,7 @@ export function SettingsPage() {
     onError: (error) => {
       const message =
         error instanceof Error ? error.message : "Unknown settings save error.";
-      setToast({ tone: "error", message });
+      pushToast({ tone: "error", message });
     },
   });
 
@@ -168,9 +169,6 @@ export function SettingsPage() {
       ...current,
       [key]: value,
     }));
-    if (toast) {
-      setToast(null);
-    }
   }
 
   function toggleVisibility(key: keyof SettingsFormValues) {
@@ -204,8 +202,8 @@ export function SettingsPage() {
     }
 
     if (Object.keys(payload).length === 0) {
-      setToast({
-        tone: "success",
+      pushToast({
+        tone: "warning",
         message: "No changed settings to save.",
       });
       return;
@@ -229,19 +227,6 @@ export function SettingsPage() {
           значения.
         </p>
       </section>
-
-      {toast ? (
-        <div
-          className={[
-            "rounded-2xl border px-4 py-3 text-sm",
-            toast.tone === "success"
-              ? "border-teal-400/30 bg-teal-400/10 text-teal-100"
-              : "border-rose-400/30 bg-rose-400/10 text-rose-100",
-          ].join(" ")}
-        >
-          {toast.message}
-        </div>
-      ) : null}
 
       {settingsQuery.isLoading ? (
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-slate-300">
