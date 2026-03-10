@@ -21,7 +21,8 @@ class PostListItem(BaseModel):
 
 
 class PostDetail(PostModel):
-    pass
+    status: PublishStatus = "draft"
+    raw_markdown: str
 
 
 class PostCreate(PostDraftData):
