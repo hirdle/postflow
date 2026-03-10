@@ -15,6 +15,13 @@ from app.infra.telegram_client import (
     TelegramSettings,
     load_telegram_settings,
 )
+from app.infra.vk_client import (
+    VK_API_BASE,
+    VK_API_VERSION,
+    VKClient,
+    VKSettings,
+    load_vk_settings,
+)
 
 __all__ = [
     "CHAT_COMPLETION_MODELS",
@@ -26,6 +33,11 @@ __all__ = [
     "MSK",
     "TelegramPublisher",
     "TelegramSettings",
+    "VK_API_BASE",
+    "VK_API_VERSION",
+    "VKClient",
+    "VKSettings",
     "load_image_api_settings",
     "load_telegram_settings",
+    "load_vk_settings",
 ]
