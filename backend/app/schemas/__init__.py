@@ -9,6 +9,7 @@ from app.schemas.media import (
 from app.schemas.posts import PostCreate, PostDetail, PostListItem, PostUpdate
 from app.schemas.preview import PreviewRequest, PreviewResponse, ValidationIssue
 from app.schemas.publishing import (
+    PublishAttempt,
     PublishRecord,
     PublishRequest,
     ScheduledPost,
@@ -27,6 +28,7 @@ __all__ = [
     "PostUpdate",
     "PreviewRequest",
     "PreviewResponse",
+    "PublishAttempt",
     "PublishRecord",
     "PublishRequest",
     "ScheduledPost",

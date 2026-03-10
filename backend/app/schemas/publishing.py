@@ -30,6 +30,17 @@ class PublishRecord(BaseModel):
     created_at: str | None = None
 
 
+class PublishAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: int | None = None
+    file_name: str
+    attempt_type: str
+    payload_snapshot: str | None = None
+    result: str | None = None
+    created_at: str | None = None
+
+
 class ScheduledPost(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
