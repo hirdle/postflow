@@ -118,8 +118,12 @@ async def create_post(payload: PostCreate) -> PostDetail:
 async def update_post(filename: str, payload: PostUpdate) -> PostDetail:
     post_path = _resolve_post_path(filename)
     existing = parse_post_file(post_path)
-    updated = existing.model_copy(update=payload.model_dump(exclude_unset=True))
-    updated = updated.model_copy(update={"file_name": existing.file_name})
+    merged_payload = {
+        **existing.model_dump(),
+        **payload.model_dump(exclude_unset=True),
+        "file_name": existing.file_name,
+    }
+    updated = PostModel.model_validate(merged_payload)
 
     raw_markdown = serialize_post(updated)
     post_path.write_text(raw_markdown, encoding="utf-8")

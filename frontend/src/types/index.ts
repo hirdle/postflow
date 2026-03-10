@@ -25,6 +25,21 @@ export interface PostListItem {
   has_poll: boolean;
 }
 
+export interface PollData {
+  question: string;
+  options: string[];
+}
+
+export interface PostDetail extends PostListItem {
+  hook_type: string | null;
+  body: string | null;
+  username: string | null;
+  hashtags: string[];
+  poll: PollData | null;
+  image_prompt: string | null;
+  raw_markdown: string;
+}
+
 export interface SettingsFormValues {
   telegram_api_id: string;
   telegram_api_hash: string;
