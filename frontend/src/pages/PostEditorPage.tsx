@@ -9,6 +9,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiFetch, buildApiUrl } from "../api/client";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
+import { PublishDialog } from "../components/PublishDialog";
 import { PublicationStatusPanel } from "../components/PublicationStatusPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
@@ -20,6 +21,7 @@ import type {
   PollData,
   PreviewResponse,
   PostDetail,
+  PublishRecord,
   PublishStatus,
   ValidationIssue,
 } from "../types";
@@ -256,9 +258,16 @@ export function PostEditorPage() {
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [mediaRevision, setMediaRevision] = useState(() => Date.now());
   const [previewPlatform, setPreviewPlatform] = useState<Platform>("telegram");
+  const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
+  const [publishResult, setPublishResult] = useState<PublishRecord | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
   const [debouncedPreviewSignature, setDebouncedPreviewSignature] = useState(() =>
     JSON.stringify(buildPreviewPayload(buildEmptyForm(), "telegram", undefined)),
   );
+  const [debouncedPublishValidationSignature, setDebouncedPublishValidationSignature] =
+    useState(() =>
+      JSON.stringify(buildPreviewPayload(buildEmptyForm(), "telegram", undefined)),
+    );
 
   const postQuery = useQuery({
     queryKey: ["post", filename],
@@ -302,6 +311,12 @@ export function PostEditorPage() {
     setPreviewPlatform(nextForm.platform);
   }, [filename, postQuery.data]);
 
+  useEffect(() => {
+    setIsPublishDialogOpen(false);
+    setPublishResult(null);
+    setPublishError(null);
+  }, [filename]);
+
   const isDirty = buildComparableSnapshot(formValues) !== initialSnapshot;
 
   useEffect(() => {
@@ -321,6 +336,9 @@ export function PostEditorPage() {
   const previewSignature = JSON.stringify(
     buildPreviewPayload(formValues, previewPlatform, filename),
   );
+  const publishValidationSignature = JSON.stringify(
+    buildPreviewPayload(formValues, formValues.platform, filename),
+  );
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -330,6 +348,14 @@ export function PostEditorPage() {
     return () => window.clearTimeout(timeout);
   }, [previewSignature]);
 
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedPublishValidationSignature(publishValidationSignature);
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [publishValidationSignature]);
+
   const previewQuery = useQuery({
     queryKey: ["preview", debouncedPreviewSignature],
     queryFn: () =>
@@ -337,6 +363,17 @@ export function PostEditorPage() {
         method: "POST",
         body: debouncedPreviewSignature,
       }),
+    refetchOnWindowFocus: false,
+  });
+
+  const publishValidationQuery = useQuery({
+    queryKey: ["preview", "publish-validation", debouncedPublishValidationSignature],
+    queryFn: () =>
+      apiFetch<PreviewResponse>("/preview", {
+        method: "POST",
+        body: debouncedPublishValidationSignature,
+      }),
+    enabled: Boolean(filename) && previewPlatform !== formValues.platform,
     refetchOnWindowFocus: false,
   });
 
@@ -396,6 +433,66 @@ export function PostEditorPage() {
     onError: (error) => {
       const message =
         error instanceof Error ? error.message : "Failed to save post.";
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: async ({ schedule }: { schedule: boolean }) => {
+      if (!filename) {
+        throw new Error("Save the draft before publishing.");
+      }
+
+      return apiFetch<PublishRecord>(`/publish/${encodeURIComponent(filename)}`, {
+        method: "POST",
+        body: JSON.stringify({ schedule }),
+      });
+    },
+    onMutate: () => {
+      setPublishResult(null);
+      setPublishError(null);
+    },
+    onSuccess: async (record) => {
+      setPublishResult(record);
+      setPublishError(null);
+
+      if (filename) {
+        queryClient.setQueryData<PostDetail | undefined>(["post", filename], (current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            ...current,
+            status: record.status,
+            publish_records: [
+              record,
+              ...current.publish_records.filter((item) => item.id !== record.id),
+            ],
+          };
+        });
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["posts"] }),
+        queryClient.invalidateQueries({ queryKey: ["schedules"] }),
+        ...(filename
+          ? [queryClient.invalidateQueries({ queryKey: ["post", filename] })]
+          : []),
+      ]);
+
+      pushToast({
+        tone: "success",
+        message:
+          record.status === "scheduled"
+            ? `Scheduled. Message ID: ${record.message_id ?? "pending"}.`
+            : `Published. Message ID: ${record.message_id ?? "pending"}.`,
+      });
+    },
+    onError: (error) => {
+      const message = formatAsyncError(error, "Publish request failed.");
+      setPublishError(message);
+      setPublishResult(null);
       pushToast({ tone: "error", message });
     },
   });
@@ -696,6 +793,31 @@ export function PostEditorPage() {
     await deleteImageMutation.mutateAsync();
   }
 
+  function resetPublishFeedback() {
+    setPublishResult(null);
+    setPublishError(null);
+  }
+
+  function openPublishDialog() {
+    resetPublishFeedback();
+    setIsPublishDialogOpen(true);
+  }
+
+  function closePublishDialog() {
+    if (publishMutation.isPending) {
+      return;
+    }
+
+    setIsPublishDialogOpen(false);
+    resetPublishFeedback();
+  }
+
+  async function handlePublishSubmit(mode: "now" | "schedule") {
+    await publishMutation.mutateAsync({
+      schedule: mode === "schedule",
+    });
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await saveMutation.mutateAsync();
@@ -704,12 +826,41 @@ export function PostEditorPage() {
   const editorTitle = formatEditorTitle(filename);
   const pollOptionCount = formValues.pollOptions.filter((option) => option.trim()).length;
   const previewIssues = previewQuery.data?.validation ?? [];
+  const publishValidationData =
+    previewPlatform === formValues.platform
+      ? previewQuery.data
+      : publishValidationQuery.data;
+  const publishValidationIssues = publishValidationData?.validation ?? [];
+  const publishValidationPending =
+    Boolean(filename) &&
+    (previewPlatform === formValues.platform
+      ? previewQuery.isLoading || previewQuery.isFetching
+      : publishValidationQuery.isLoading || publishValidationQuery.isFetching);
+  const publishValidationError =
+    previewPlatform === formValues.platform
+      ? previewQuery.isError
+        ? formatAsyncError(
+            previewQuery.error,
+            "Could not refresh publish validation.",
+          )
+        : null
+      : publishValidationQuery.isError
+        ? formatAsyncError(
+            publishValidationQuery.error,
+            "Could not refresh publish validation.",
+          )
+        : null;
   const previewCharCount = previewQuery.data?.char_count ?? 0;
   const canManageImage = Boolean(filename);
   const isImageMutationPending =
     uploadImageMutation.isPending ||
     generateImageMutation.isPending ||
     deleteImageMutation.isPending;
+  const canOpenPublishDialog =
+    Boolean(filename) &&
+    !postQuery.isLoading &&
+    !saveMutation.isPending &&
+    !publishMutation.isPending;
   const mediaModels = [...(mediaModelsQuery.data ?? [])].sort((left, right) =>
     left.id.localeCompare(right.id),
   );
@@ -759,14 +910,26 @@ export function PostEditorPage() {
               <PresenceBadge label="Poll" active={formValues.pollEnabled} />
             </div>
 
-            <button
-              type="submit"
-              form="post-editor-form"
-              className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              disabled={saveMutation.isPending || postQuery.isLoading}
-            >
-              {saveMutation.isPending ? "Saving..." : "Save post"}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                data-open-publish-dialog="true"
+                className="inline-flex items-center justify-center rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-slate-100 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-slate-900 disabled:text-slate-500"
+                disabled={!canOpenPublishDialog}
+                onClick={openPublishDialog}
+              >
+                Publish
+              </button>
+
+              <button
+                type="submit"
+                form="post-editor-form"
+                className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                disabled={saveMutation.isPending || postQuery.isLoading}
+              >
+                {saveMutation.isPending ? "Saving..." : "Save post"}
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -1561,6 +1724,29 @@ export function PostEditorPage() {
           </section>
         </div>
       </div>
+
+      {filename ? (
+        <PublishDialog
+          open={isPublishDialogOpen}
+          fileName={filename}
+          platform={formValues.platform}
+          currentStatus={publicationStatus}
+          scheduledDate={formValues.date}
+          scheduledTime={formValues.time}
+          hasUnsavedChanges={isDirty}
+          validationIssues={publishValidationIssues}
+          validationPending={publishValidationPending}
+          validationErrorMessage={publishValidationError}
+          submitPending={publishMutation.isPending}
+          result={publishResult}
+          errorMessage={publishError}
+          onClose={closePublishDialog}
+          onResetFeedback={resetPublishFeedback}
+          onSubmit={(mode) => {
+            void handlePublishSubmit(mode);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
