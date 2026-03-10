@@ -35,6 +35,14 @@ After each completed issue:
 1. Create a dedicated git commit for that task immediately.
 2. Only after the commit, update the issue/project status to `Done`.
 
+### Frontend Testing
+
+For every frontend issue that changes user-facing UI:
+
+1. Before or during implementation, add an issue comment with the planned Playwright coverage for that task.
+2. When the UI becomes testable, run browser-based Playwright checks against the Docker stack for the changed flows.
+3. Log the test result or blocker in the issue before moving it to `Done`.
+
 ### Project Board Statuses
 
 - **Todo** — created, not started
