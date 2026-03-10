@@ -134,6 +134,9 @@ export function PublishDialog({
   if (validationErrorMessage) {
     blockingReasons.push(validationErrorMessage);
   }
+  if (errorMessage) {
+    blockingReasons.push("Resolve the latest publish error before retrying.");
+  }
   if (blockingIssues.length > 0) {
     blockingReasons.push(
       `Fix ${blockingIssues.length} blocking validation issue${

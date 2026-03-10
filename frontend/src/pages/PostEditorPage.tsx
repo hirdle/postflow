@@ -493,6 +493,13 @@ export function PostEditorPage() {
       const message = formatAsyncError(error, "Publish request failed.");
       setPublishError(message);
       setPublishResult(null);
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["posts"] }),
+        queryClient.invalidateQueries({ queryKey: ["schedules"] }),
+        ...(filename
+          ? [queryClient.invalidateQueries({ queryKey: ["post", filename] })]
+          : []),
+      ]);
       pushToast({ tone: "error", message });
     },
   });
@@ -831,11 +838,14 @@ export function PostEditorPage() {
       ? previewQuery.data
       : publishValidationQuery.data;
   const publishValidationIssues = publishValidationData?.validation ?? [];
+  const isPublishValidationDebouncing =
+    publishValidationSignature !== debouncedPublishValidationSignature;
   const publishValidationPending =
     Boolean(filename) &&
-    (previewPlatform === formValues.platform
-      ? previewQuery.isLoading || previewQuery.isFetching
-      : publishValidationQuery.isLoading || publishValidationQuery.isFetching);
+    (isPublishValidationDebouncing ||
+      (previewPlatform === formValues.platform
+        ? previewQuery.isLoading || previewQuery.isFetching
+        : publishValidationQuery.isLoading || publishValidationQuery.isFetching));
   const publishValidationError =
     previewPlatform === formValues.platform
       ? previewQuery.isError
@@ -859,6 +869,7 @@ export function PostEditorPage() {
   const canOpenPublishDialog =
     Boolean(filename) &&
     !postQuery.isLoading &&
+    !postQuery.isError &&
     !saveMutation.isPending &&
     !publishMutation.isPending;
   const mediaModels = [...(mediaModelsQuery.data ?? [])].sort((left, right) =>
