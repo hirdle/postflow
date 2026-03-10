@@ -133,6 +133,41 @@ class StatusRepository:
             await db.commit()
             return cursor.rowcount > 0
 
+    async def update_schedule(
+        self,
+        record_id: int,
+        scheduled_date: str,
+        scheduled_time: str,
+        message_id: int,
+        poll_message_id: int | None = None,
+        error: str | None = None,
+    ) -> bool:
+        async with get_db(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE publish_records
+                SET scheduled_date = ?,
+                    scheduled_time = ?,
+                    message_id = ?,
+                    poll_message_id = ?,
+                    status = ?,
+                    published_at = NULL,
+                    error = ?
+                WHERE id = ?
+                """,
+                (
+                    scheduled_date,
+                    scheduled_time,
+                    message_id,
+                    poll_message_id,
+                    "scheduled",
+                    error,
+                    record_id,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def log_attempt(
         self,
         file_name: str,

@@ -11,7 +11,12 @@ from app.core.posts import ValidationIssue, parse_post_file, validate_post
 from app.core.preview import format_telegram, format_vk
 from app.core.publishing.status_repository import StatusRepository
 from app.infra import TelegramPublisher, VKClient
-from app.schemas.publishing import PublishRecord, PublishRequest
+from app.schemas.publishing import (
+    PublishRecord,
+    PublishRequest,
+    ScheduleUpdateRequest,
+    ScheduledPost,
+)
 
 PublishClientFactory = Callable[[], Any]
 
@@ -24,6 +29,10 @@ class PublishValidationError(ValueError):
 
 
 class DuplicatePublishError(RuntimeError):
+    pass
+
+
+class ScheduleStateError(RuntimeError):
     pass
 
 
@@ -137,6 +146,160 @@ class PublishService:
         )
         return stored_record
 
+    async def list_schedules(self) -> list[ScheduledPost]:
+        records = await self.repository.list(status="scheduled")
+        items: list[ScheduledPost] = []
+        for record in records:
+            if record.id is None or not record.scheduled_date or not record.scheduled_time:
+                continue
+            items.append(
+                ScheduledPost(
+                    id=record.id,
+                    file_name=record.file_name,
+                    platform=record.platform,
+                    scheduled_date=record.scheduled_date,
+                    scheduled_time=record.scheduled_time,
+                    status=record.status,
+                )
+            )
+        return items
+
+    async def cancel_schedule(self, record_id: int) -> PublishRecord:
+        record = await self._require_scheduled_record(record_id)
+
+        try:
+            await self._cancel_platform_record(record)
+        except Exception as exc:
+            await self.repository.update_status(
+                record_id,
+                "failed",
+                error=str(exc),
+            )
+            await self.repository.log_attempt(
+                record.file_name,
+                "cancel",
+                {"record_id": record_id},
+                {
+                    "status": "failure",
+                    "error": str(exc),
+                },
+            )
+            raise
+
+        await self.repository.update_status(
+            record_id,
+            "cancelled",
+            error="",
+        )
+        await self.repository.log_attempt(
+            record.file_name,
+            "cancel",
+            {"record_id": record_id},
+            {
+                "status": "cancelled",
+            },
+        )
+        cancelled_record = await self.repository.get(record_id)
+        if cancelled_record is None:
+            raise RuntimeError(f"Cancelled record {record_id} could not be reloaded.")
+        return cancelled_record
+
+    async def reschedule(
+        self,
+        record_id: int,
+        payload: ScheduleUpdateRequest,
+    ) -> PublishRecord:
+        record = await self._require_scheduled_record(record_id)
+        post_path = _resolve_post_path(record.file_name)
+        post = parse_post_file(post_path).model_copy(
+            update={
+                "platform": record.platform,
+                "date": payload.scheduled_date,
+                "time": payload.scheduled_time,
+            }
+        )
+
+        blocking_issues = [
+            issue
+            for issue in validate_post(post, record.platform)
+            if issue.level == "error"
+        ]
+        if blocking_issues:
+            await self.repository.log_attempt(
+                record.file_name,
+                "reschedule",
+                payload.model_dump(),
+                {
+                    "status": "validation_error",
+                    "issues": [issue.model_dump() for issue in blocking_issues],
+                },
+            )
+            raise PublishValidationError(blocking_issues)
+
+        try:
+            await self._cancel_platform_record(record)
+        except Exception as exc:
+            await self.repository.update_status(
+                record_id,
+                "failed",
+                error=str(exc),
+            )
+            await self.repository.log_attempt(
+                record.file_name,
+                "reschedule",
+                payload.model_dump(),
+                {
+                    "status": "failure",
+                    "error": str(exc),
+                },
+            )
+            raise
+
+        try:
+            refreshed_record = await self._publish_to_platform(post, schedule=True)
+        except Exception as exc:
+            await self.repository.update_status(
+                record_id,
+                "failed",
+                error=str(exc),
+            )
+            await self.repository.log_attempt(
+                record.file_name,
+                "reschedule",
+                payload.model_dump(),
+                {
+                    "status": "failure",
+                    "error": str(exc),
+                },
+            )
+            raise
+
+        if refreshed_record.message_id is None:
+            raise RuntimeError("Rescheduled publish did not return a message id.")
+
+        await self.repository.update_schedule(
+            record_id,
+            scheduled_date=payload.scheduled_date,
+            scheduled_time=payload.scheduled_time,
+            message_id=refreshed_record.message_id,
+            poll_message_id=refreshed_record.poll_message_id,
+            error="",
+        )
+        await self.repository.log_attempt(
+            record.file_name,
+            "reschedule",
+            payload.model_dump(),
+            {
+                "status": "scheduled",
+                "message_id": refreshed_record.message_id,
+                "poll_message_id": refreshed_record.poll_message_id,
+            },
+        )
+        updated_record = await self.repository.get(record_id)
+        if updated_record is None:
+            raise RuntimeError(f"Rescheduled record {record_id} could not be reloaded.")
+        return updated_record
+
     async def _publish_to_platform(
         self,
         post: Any,
@@ -203,6 +366,51 @@ class PublishService:
             published_at=None if schedule else datetime.now(timezone.utc).isoformat(),
             error=None,
         )
+
+    async def _require_scheduled_record(self, record_id: int) -> PublishRecord:
+        record = await self.repository.get(record_id)
+        if record is None:
+            raise FileNotFoundError(f"Schedule record not found: {record_id}")
+        if record.status != "scheduled":
+            raise ScheduleStateError(
+                f"Record {record_id} is not scheduled (status={record.status})."
+            )
+        return record
+
+    async def _cancel_platform_record(self, record: PublishRecord) -> None:
+        if record.platform == "telegram":
+            client = await _resolve_client(self.telegram_factory)
+            try:
+                if record.message_id is not None:
+                    deleted = await client.delete_message(record.message_id)
+                    if not deleted:
+                        raise RuntimeError(
+                            f"Telegram message {record.message_id} could not be deleted."
+                        )
+                if record.poll_message_id is not None:
+                    deleted = await client.delete_message(record.poll_message_id)
+                    if not deleted:
+                        raise RuntimeError(
+                            f"Telegram poll {record.poll_message_id} could not be deleted."
+                        )
+            finally:
+                await _close_client(client, "disconnect")
+            return
+
+        if record.platform == "vk":
+            client = await _resolve_client(self.vk_factory)
+            try:
+                if record.message_id is not None:
+                    deleted = await client.delete_post(record.message_id)
+                    if not deleted:
+                        raise RuntimeError(
+                            f"VK post {record.message_id} could not be deleted."
+                        )
+            finally:
+                await _close_client(client, "close")
+            return
+
+        raise ValueError(f"Unsupported platform: {record.platform}")
 
 
 def _resolve_post_path(file_name: str) -> Path:

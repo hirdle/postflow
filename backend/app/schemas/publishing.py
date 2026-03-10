@@ -44,6 +44,7 @@ class PublishAttempt(BaseModel):
 class ScheduledPost(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    id: int
     file_name: str
     platform: PlatformName
     scheduled_date: str
