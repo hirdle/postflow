@@ -1,9 +1,28 @@
 export type Platform = "telegram" | "vk";
+export type PublishStatus =
+  | "draft"
+  | "scheduled"
+  | "published"
+  | "failed"
+  | "cancelled";
 
 export interface PlaceholderCardProps {
   title: string;
   description: string;
   items: string[];
+}
+
+export interface PostListItem {
+  file_name: string;
+  date: string | null;
+  time: string | null;
+  platform: Platform | null;
+  post_type: string | null;
+  rubric: string | null;
+  title: string | null;
+  status: PublishStatus;
+  has_image: boolean;
+  has_poll: boolean;
 }
 
 export interface SettingsFormValues {

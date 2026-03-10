@@ -1,6 +1,6 @@
-type StatusTone = "draft" | "scheduled" | "published" | "failed" | "cancelled";
+import type { PublishStatus } from "../types";
 
-const STATUS_STYLES: Record<StatusTone, string> = {
+const STATUS_STYLES: Record<PublishStatus, string> = {
   draft: "border-slate-400/20 bg-slate-400/10 text-slate-200",
   scheduled: "border-sky-400/30 bg-sky-400/10 text-sky-100",
   published: "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
@@ -9,7 +9,7 @@ const STATUS_STYLES: Record<StatusTone, string> = {
 };
 
 interface StatusBadgeProps {
-  status: StatusTone;
+  status: PublishStatus;
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {
