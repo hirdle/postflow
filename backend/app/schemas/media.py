@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class MediaGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    file_name: str
+    file_name: str = Field(
+        validation_alias=AliasChoices("filename", "file_name")
+    )
     prompt: str
     model: str | None = None
     size: str = "1024x1024"
