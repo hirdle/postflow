@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -6,13 +6,16 @@ import {
 } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { apiFetch } from "../api/client";
+import { apiFetch, buildApiUrl } from "../api/client";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
 import type {
   Platform,
+  MediaGenerateResponse,
+  MediaModelInfo,
+  MediaUploadResponse,
   PollData,
   PreviewResponse,
   PostDetail,
@@ -24,6 +27,8 @@ const DEFAULT_USERNAMES: Record<Platform, string> = {
   telegram: "@biovoltru",
   vk: "@biovolt",
 };
+const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp";
+const DEFAULT_IMAGE_SIZE = "1024x1024";
 const PREVIEW_DEBOUNCE_MS = 400;
 
 interface PostEditorFormValues {
@@ -179,6 +184,14 @@ function formatEditorTitle(filename: string | undefined) {
   return filename ? `Editing: ${filename}` : "New post";
 }
 
+function formatAsyncError(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function buildMediaImageUrl(fileName: string, revision: number) {
+  return buildApiUrl(`/media/${encodeURIComponent(fileName)}?v=${revision}`);
+}
+
 function validationClasses(level: ValidationIssue["level"]) {
   if (level === "error") {
     return "border-rose-400/30 bg-rose-400/10 text-rose-100";
@@ -227,6 +240,7 @@ export function PostEditorPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [panel, setPanel] = useState<"editor" | "preview">("editor");
   const [formValues, setFormValues] = useState<PostEditorFormValues>(() =>
     buildEmptyForm(),
@@ -236,6 +250,10 @@ export function PostEditorPage() {
   );
   const [hashtagInput, setHashtagInput] = useState("");
   const [imagePromptExpanded, setImagePromptExpanded] = useState(false);
+  const [isImageDragActive, setIsImageDragActive] = useState(false);
+  const [selectedImageModel, setSelectedImageModel] = useState("");
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [mediaRevision, setMediaRevision] = useState(() => Date.now());
   const [previewPlatform, setPreviewPlatform] = useState<Platform>("telegram");
   const [debouncedPreviewSignature, setDebouncedPreviewSignature] = useState(() =>
     JSON.stringify(buildPreviewPayload(buildEmptyForm(), "telegram", undefined)),
@@ -248,12 +266,23 @@ export function PostEditorPage() {
     refetchOnWindowFocus: false,
   });
 
+  const mediaModelsQuery = useQuery({
+    queryKey: ["media", "models"],
+    queryFn: () => apiFetch<MediaModelInfo[]>("/media/models"),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
   useEffect(() => {
     if (!filename) {
       const emptyForm = buildEmptyForm();
       setFormValues(emptyForm);
       setInitialSnapshot(buildComparableSnapshot(emptyForm));
       setImagePromptExpanded(false);
+      setIsImageDragActive(false);
+      setMediaError(null);
+      setMediaRevision(Date.now());
       setPreviewPlatform(emptyForm.platform);
       return;
     }
@@ -266,6 +295,9 @@ export function PostEditorPage() {
     setFormValues(nextForm);
     setInitialSnapshot(buildComparableSnapshot(nextForm));
     setImagePromptExpanded(Boolean(nextForm.imagePrompt));
+    setIsImageDragActive(false);
+    setMediaError(null);
+    setMediaRevision(Date.now());
     setPreviewPlatform(nextForm.platform);
   }, [filename, postQuery.data]);
 
@@ -367,6 +399,116 @@ export function PostEditorPage() {
     },
   });
 
+  const uploadImageMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!filename) {
+        throw new Error("Save the draft before attaching an image.");
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      return apiFetch<MediaUploadResponse>(
+        `/media/upload/${encodeURIComponent(filename)}`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+    },
+    onSuccess: () => {
+      setMediaError(null);
+      setMediaRevision(Date.now());
+      setFormValues((current) => ({
+        ...current,
+        hasImage: true,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      pushToast({
+        tone: "success",
+        message: "Image uploaded and linked to the draft.",
+      });
+    },
+    onError: (error) => {
+      const message = formatAsyncError(error, "Failed to upload the image.");
+      setMediaError(message);
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const generateImageMutation = useMutation({
+    mutationFn: async () => {
+      if (!filename) {
+        throw new Error("Save the draft before generating an image.");
+      }
+
+      const prompt = formValues.imagePrompt.trim();
+      if (!prompt) {
+        throw new Error("Image prompt is required before generation.");
+      }
+
+      return apiFetch<MediaGenerateResponse>("/media/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          file_name: filename,
+          prompt,
+          model: selectedImageModel || undefined,
+          size: DEFAULT_IMAGE_SIZE,
+        }),
+      });
+    },
+    onSuccess: (result) => {
+      setMediaError(null);
+      setMediaRevision(Date.now());
+      setFormValues((current) => ({
+        ...current,
+        hasImage: true,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      pushToast({
+        tone: "success",
+        message: result.model
+          ? `Image generated with ${result.model}.`
+          : "Image generated with the backend default model.",
+      });
+    },
+    onError: (error) => {
+      const message = formatAsyncError(error, "Image generation failed.");
+      setMediaError(message);
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const deleteImageMutation = useMutation({
+    mutationFn: async () => {
+      if (!filename) {
+        throw new Error("Save the draft before deleting an image.");
+      }
+
+      await apiFetch<void>(`/media/${encodeURIComponent(filename)}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => {
+      setMediaError(null);
+      setMediaRevision(Date.now());
+      setFormValues((current) => ({
+        ...current,
+        hasImage: false,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["posts"] });
+      pushToast({
+        tone: "success",
+        message: "Attached image deleted.",
+      });
+    },
+    onError: (error) => {
+      const message = formatAsyncError(error, "Failed to delete the image.");
+      setMediaError(message);
+      pushToast({ tone: "error", message });
+    },
+  });
+
   function setFieldValue<Key extends keyof PostEditorFormValues>(
     key: Key,
     value: PostEditorFormValues[Key],
@@ -463,6 +605,96 @@ export function PostEditorPage() {
     }));
   }
 
+  async function uploadSelectedFile(file: File) {
+    setMediaError(null);
+    await uploadImageMutation.mutateAsync(file);
+  }
+
+  async function handleImageInputChange(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const nextFile = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!nextFile) {
+      return;
+    }
+
+    await uploadSelectedFile(nextFile);
+  }
+
+  function handleImagePickerOpen() {
+    if (!filename) {
+      const message = "Save the draft before attaching an image.";
+      setMediaError(message);
+      pushToast({ tone: "warning", message });
+      return;
+    }
+
+    fileInputRef.current?.click();
+  }
+
+  function handleImageDragEnter(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+
+    if (!filename) {
+      return;
+    }
+
+    setIsImageDragActive(true);
+  }
+
+  function handleImageDragOver(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+
+    if (!filename) {
+      return;
+    }
+
+    event.dataTransfer.dropEffect = "copy";
+    setIsImageDragActive(true);
+  }
+
+  function handleImageDragLeave(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsImageDragActive(false);
+  }
+
+  async function handleImageDrop(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsImageDragActive(false);
+
+    if (!filename) {
+      const message = "Save the draft before attaching an image.";
+      setMediaError(message);
+      pushToast({ tone: "warning", message });
+      return;
+    }
+
+    const nextFile = event.dataTransfer.files?.[0];
+    if (!nextFile) {
+      return;
+    }
+
+    await uploadSelectedFile(nextFile);
+  }
+
+  async function handleDeleteImage() {
+    if (!filename) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(
+      "Delete the attached image for this draft?",
+    );
+    if (!shouldDelete) {
+      return;
+    }
+
+    setMediaError(null);
+    await deleteImageMutation.mutateAsync();
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await saveMutation.mutateAsync();
@@ -472,6 +704,27 @@ export function PostEditorPage() {
   const pollOptionCount = formValues.pollOptions.filter((option) => option.trim()).length;
   const previewIssues = previewQuery.data?.validation ?? [];
   const previewCharCount = previewQuery.data?.char_count ?? 0;
+  const canManageImage = Boolean(filename);
+  const isImageMutationPending =
+    uploadImageMutation.isPending ||
+    generateImageMutation.isPending ||
+    deleteImageMutation.isPending;
+  const mediaModels = [...(mediaModelsQuery.data ?? [])].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+  const mediaModelsError = mediaModelsQuery.isError
+    ? formatAsyncError(
+        mediaModelsQuery.error,
+        "Could not load image model options.",
+      )
+    : null;
+  const imagePreviewUrl =
+    filename && formValues.hasImage
+      ? buildMediaImageUrl(filename, mediaRevision)
+      : null;
+  const generatedImageName = filename
+    ? `${filename.replace(/\.md$/, "")}.png`
+    : "Draft image";
 
   return (
     <div className="space-y-6">
@@ -821,26 +1074,33 @@ export function PostEditorPage() {
                     Image prompt
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-slate-300">
-                    Prompt text is stored now; image generation UI lands in
-                    `#23`.
+                    Prompt, upload, generation and delete are wired to the
+                    backend media API for this draft.
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
-                  onClick={() =>
-                    setImagePromptExpanded((current) => !current)
-                  }
-                >
-                  {imagePromptExpanded ? "Collapse prompt" : "Expand prompt"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <PresenceBadge
+                    label={formValues.hasImage ? "Attached" : "No image"}
+                    active={formValues.hasImage}
+                  />
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                    onClick={() =>
+                      setImagePromptExpanded((current) => !current)
+                    }
+                  >
+                    {imagePromptExpanded ? "Collapse prompt" : "Expand prompt"}
+                  </button>
+                </div>
               </div>
 
               {imagePromptExpanded ? (
-                <div className="mt-5 space-y-3">
+                <div className="mt-5 space-y-5">
                   <FieldShell label="Prompt">
                     <textarea
+                      data-image-prompt-input="true"
                       className="min-h-[180px] rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
                       value={formValues.imagePrompt}
                       placeholder="Describe the desired image"
@@ -850,21 +1110,212 @@ export function PostEditorPage() {
                     />
                   </FieldShell>
 
-                  {formValues.imagePrompt ? (
-                    <button
-                      type="button"
-                      className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
-                      onClick={() => setFieldValue("imagePrompt", "")}
-                    >
-                      Clear prompt
-                    </button>
-                  ) : null}
+                  <input
+                    ref={fileInputRef}
+                    data-media-input="true"
+                    className="hidden"
+                    type="file"
+                    accept={ACCEPTED_IMAGE_TYPES}
+                    onChange={handleImageInputChange}
+                  />
+
+                  <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          data-media-upload-button="true"
+                          className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-500"
+                          disabled={!canManageImage || isImageMutationPending}
+                          onClick={handleImagePickerOpen}
+                        >
+                          {uploadImageMutation.isPending
+                            ? "Uploading..."
+                            : "Upload file"}
+                        </button>
+
+                        <button
+                          type="button"
+                          data-media-generate-button="true"
+                          className="rounded-full bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                          disabled={
+                            !canManageImage ||
+                            isImageMutationPending ||
+                            !formValues.imagePrompt.trim()
+                          }
+                          onClick={() => {
+                            setMediaError(null);
+                            void generateImageMutation.mutateAsync();
+                          }}
+                        >
+                          {generateImageMutation.isPending
+                            ? "Generating..."
+                            : formValues.hasImage
+                              ? "Regenerate image"
+                              : "Generate image"}
+                        </button>
+
+                        <button
+                          type="button"
+                          data-media-delete-button="true"
+                          className="rounded-full border border-rose-300/20 px-4 py-3 text-sm font-medium text-rose-100 transition hover:border-rose-300/40 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-500"
+                          disabled={
+                            !canManageImage ||
+                            isImageMutationPending ||
+                            !formValues.hasImage
+                          }
+                          onClick={() => {
+                            void handleDeleteImage();
+                          }}
+                        >
+                          {deleteImageMutation.isPending
+                            ? "Deleting..."
+                            : "Delete image"}
+                        </button>
+
+                        {formValues.imagePrompt ? (
+                          <button
+                            type="button"
+                            className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                            onClick={() => setFieldValue("imagePrompt", "")}
+                          >
+                            Clear prompt
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <div
+                        data-media-dropzone="true"
+                        data-drag-active={isImageDragActive ? "true" : "false"}
+                        className={[
+                          "rounded-[28px] border border-dashed p-5 transition",
+                          isImageDragActive
+                            ? "border-teal-300/70 bg-teal-400/10"
+                            : "border-white/10 bg-slate-950/40",
+                        ].join(" ")}
+                        onDragEnter={handleImageDragEnter}
+                        onDragOver={handleImageDragOver}
+                        onDragLeave={handleImageDragLeave}
+                        onDrop={(event) => {
+                          void handleImageDrop(event);
+                        }}
+                      >
+                        <p className="text-sm font-medium text-slate-100">
+                          Drag PNG, JPG or WEBP here
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-slate-400">
+                          {canManageImage
+                            ? "The upload is converted to PNG and saved under the draft filename."
+                            : "Save the draft first so the backend has a stable filename for the image."}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-[1fr_0.9fr]">
+                        <FieldShell
+                          label="Model"
+                          hint={
+                            mediaModels.length > 0
+                              ? `${mediaModels.length} models available from the upstream API.`
+                              : "Auto uses the backend default model."
+                          }
+                        >
+                          <select
+                            data-media-model="true"
+                            className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60 disabled:cursor-not-allowed disabled:text-slate-500"
+                            value={selectedImageModel}
+                            disabled={isImageMutationPending}
+                            onChange={(event) =>
+                              setSelectedImageModel(event.target.value)
+                            }
+                          >
+                            <option value="">Auto (backend default)</option>
+                            {mediaModels.map((model) => (
+                              <option key={model.id} value={model.id}>
+                                {model.id}
+                                {model.owned_by ? ` • ${model.owned_by}` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </FieldShell>
+
+                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                          <p className="text-sm font-medium text-slate-200">
+                            Media status
+                          </p>
+                          <p className="mt-2 text-sm leading-6 text-slate-400">
+                            {formValues.hasImage
+                              ? `Attached asset: ${generatedImageName}`
+                              : "No image file attached yet."}
+                          </p>
+                          <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">
+                            {mediaModelsQuery.isLoading
+                              ? "Loading models"
+                              : selectedImageModel
+                                ? `Selected model: ${selectedImageModel}`
+                                : "Selected model: backend default"}
+                          </p>
+                        </div>
+                      </div>
+
+                      {mediaError ? (
+                        <div
+                          data-media-error="true"
+                          className="rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-100"
+                        >
+                          {mediaError}
+                        </div>
+                      ) : null}
+
+                      {mediaModelsError ? (
+                        <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                          {mediaModelsError} Configure Image API settings if
+                          generation is unavailable.
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-[28px] border border-white/10 bg-slate-950/40 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
+                            Thumbnail
+                          </p>
+                          <p className="mt-2 text-sm text-slate-400">
+                            {generatedImageName}
+                          </p>
+                        </div>
+                        <PresenceBadge
+                          label={formValues.hasImage ? "Ready" : "Empty"}
+                          active={formValues.hasImage}
+                        />
+                      </div>
+
+                      <div className="mt-4 overflow-hidden rounded-[24px] border border-white/10 bg-gradient-to-br from-white/5 to-transparent">
+                        {imagePreviewUrl ? (
+                          <img
+                            data-media-image-preview="true"
+                            className="h-[320px] w-full object-cover"
+                            src={imagePreviewUrl}
+                            alt={`Preview for ${generatedImageName}`}
+                          />
+                        ) : (
+                          <div className="flex h-[320px] items-center justify-center px-6 text-center text-sm leading-6 text-slate-500">
+                            {formValues.imagePrompt.trim()
+                              ? "Prompt is ready. Generate or upload an image to see the thumbnail."
+                              : "No image yet. Add a prompt or drop a file here."}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <p className="mt-5 text-sm text-slate-500">
-                  {formValues.imagePrompt
-                    ? "Prompt is stored but the section is collapsed."
-                    : "Prompt section is collapsed until you expand it."}
+                  {formValues.hasImage
+                    ? "Image is attached, but the management panel is collapsed."
+                    : formValues.imagePrompt
+                      ? "Prompt is stored, but the management panel is collapsed."
+                      : "Prompt section is collapsed until you expand it."}
                 </p>
               )}
             </section>
@@ -1036,10 +1487,19 @@ export function PostEditorPage() {
                         label={formValues.hasImage ? "Attached" : "Prompt ready"}
                       />
                     </div>
-                    <div className="mt-4 rounded-[24px] border border-dashed border-white/10 bg-gradient-to-br from-white/5 to-transparent p-8 text-center text-sm text-slate-400">
-                      {formValues.hasImage
-                        ? "Image file is attached to this draft."
-                        : "Image prompt is ready; generation UI lands in #23."}
+                    <div className="mt-4 overflow-hidden rounded-[24px] border border-dashed border-white/10 bg-gradient-to-br from-white/5 to-transparent">
+                      {imagePreviewUrl ? (
+                        <img
+                          className="h-[260px] w-full object-cover"
+                          src={imagePreviewUrl}
+                          alt={`Preview for ${generatedImageName}`}
+                        />
+                      ) : (
+                        <div className="p-8 text-center text-sm text-slate-400">
+                          Image prompt is ready; upload or generate to attach
+                          the final asset.
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : null}

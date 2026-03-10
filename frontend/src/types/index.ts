@@ -55,6 +55,20 @@ export interface PreviewResponse {
   platform: Platform | null;
 }
 
+export interface MediaUploadResponse {
+  file_name: string;
+  image_path: string;
+}
+
+export interface MediaGenerateResponse extends MediaUploadResponse {
+  model: string | null;
+}
+
+export interface MediaModelInfo {
+  id: string;
+  owned_by: string | null;
+}
+
 export interface SettingsFormValues {
   telegram_api_id: string;
   telegram_api_hash: string;
