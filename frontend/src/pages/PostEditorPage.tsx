@@ -9,20 +9,22 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiFetch } from "../api/client";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
-import { PlaceholderCard } from "../components/PlaceholderCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../components/ToastProvider";
 import type {
   Platform,
   PollData,
+  PreviewResponse,
   PostDetail,
   PublishStatus,
+  ValidationIssue,
 } from "../types";
 
 const DEFAULT_USERNAMES: Record<Platform, string> = {
   telegram: "@biovoltru",
   vk: "@biovolt",
 };
+const PREVIEW_DEBOUNCE_MS = 400;
 
 interface PostEditorFormValues {
   date: string;
@@ -146,8 +148,58 @@ function buildComparableSnapshot(form: PostEditorFormValues) {
   return JSON.stringify(toSavePayload(form));
 }
 
+function buildPreviewPayload(
+  form: PostEditorFormValues,
+  platform: Platform,
+  fileName: string | undefined,
+) {
+  const basePayload = toSavePayload(form);
+  const previewPollOptions = form.pollOptions
+    .map((option) => option.trim())
+    .filter(Boolean);
+
+  return {
+    ...basePayload,
+    file_name: fileName ?? "draft.md",
+    platform,
+    poll:
+      form.pollEnabled &&
+      form.pollQuestion.trim() &&
+      previewPollOptions.length >= 2
+        ? {
+            question: form.pollQuestion.trim(),
+            options: previewPollOptions,
+          }
+        : null,
+    has_image: form.hasImage,
+  };
+}
+
 function formatEditorTitle(filename: string | undefined) {
   return filename ? `Editing: ${filename}` : "New post";
+}
+
+function validationClasses(level: ValidationIssue["level"]) {
+  if (level === "error") {
+    return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+  }
+  if (level === "warning") {
+    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+  }
+  return "border-sky-400/30 bg-sky-400/10 text-sky-100";
+}
+
+function charCountClasses(
+  preview: PreviewResponse | undefined,
+) {
+  const issues = preview?.validation ?? [];
+  if (issues.some((issue) => issue.level === "error")) {
+    return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+  }
+  if (issues.some((issue) => issue.code === "post_length")) {
+    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+  }
+  return "border-teal-400/30 bg-teal-400/10 text-teal-100";
 }
 
 function FieldShell({
@@ -184,6 +236,10 @@ export function PostEditorPage() {
   );
   const [hashtagInput, setHashtagInput] = useState("");
   const [imagePromptExpanded, setImagePromptExpanded] = useState(false);
+  const [previewPlatform, setPreviewPlatform] = useState<Platform>("telegram");
+  const [debouncedPreviewSignature, setDebouncedPreviewSignature] = useState(() =>
+    JSON.stringify(buildPreviewPayload(buildEmptyForm(), "telegram", undefined)),
+  );
 
   const postQuery = useQuery({
     queryKey: ["post", filename],
@@ -198,6 +254,7 @@ export function PostEditorPage() {
       setFormValues(emptyForm);
       setInitialSnapshot(buildComparableSnapshot(emptyForm));
       setImagePromptExpanded(false);
+      setPreviewPlatform(emptyForm.platform);
       return;
     }
 
@@ -209,6 +266,7 @@ export function PostEditorPage() {
     setFormValues(nextForm);
     setInitialSnapshot(buildComparableSnapshot(nextForm));
     setImagePromptExpanded(Boolean(nextForm.imagePrompt));
+    setPreviewPlatform(nextForm.platform);
   }, [filename, postQuery.data]);
 
   const isDirty = buildComparableSnapshot(formValues) !== initialSnapshot;
@@ -226,6 +284,28 @@ export function PostEditorPage() {
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirty]);
+
+  const previewSignature = JSON.stringify(
+    buildPreviewPayload(formValues, previewPlatform, filename),
+  );
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedPreviewSignature(previewSignature);
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [previewSignature]);
+
+  const previewQuery = useQuery({
+    queryKey: ["preview", debouncedPreviewSignature],
+    queryFn: () =>
+      apiFetch<PreviewResponse>("/preview", {
+        method: "POST",
+        body: debouncedPreviewSignature,
+      }),
+    refetchOnWindowFocus: false,
+  });
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -390,17 +470,8 @@ export function PostEditorPage() {
 
   const editorTitle = formatEditorTitle(filename);
   const pollOptionCount = formValues.pollOptions.filter((option) => option.trim()).length;
-  const previewSummaryItems = [
-    `Platform: ${formValues.platform}`,
-    `Body length: ${formValues.body.length} chars`,
-    `Hashtags: ${formValues.hashtags.length}`,
-    formValues.pollEnabled
-      ? `Poll options: ${pollOptionCount}`
-      : "Poll disabled",
-    formValues.imagePrompt.trim()
-      ? "Image prompt prepared"
-      : "Image prompt empty",
-  ];
+  const previewIssues = previewQuery.data?.validation ?? [];
+  const previewCharCount = previewQuery.data?.char_count ?? 0;
 
   return (
     <div className="space-y-6">
@@ -414,8 +485,8 @@ export function PostEditorPage() {
               {editorTitle}
             </h2>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-              Левая колонка уже работает как реальная форма поверх posts API.
-              Preview panel пока остаётся каркасом до задачи `#22`.
+              Левая колонка редактирует draft поверх posts API, а правая уже
+              показывает live preview через `POST /api/preview`.
             </p>
             <p className="mt-2 text-sm text-slate-500">
               {filename ?? "Draft is not saved yet"}
@@ -824,11 +895,199 @@ export function PostEditorPage() {
         </div>
 
         <div className={panel === "editor" ? "hidden xl:block" : ""}>
-          <PlaceholderCard
-            title="Preview column"
-            description="Правая колонка остаётся подготовленной для Preview API и validation summary, но уже отражает текущее состояние формы."
-            items={previewSummaryItems}
-          />
+          <section
+            className="space-y-5 rounded-3xl border border-white/10 bg-white/5 p-6"
+            data-preview-platform={previewPlatform}
+          >
+            <div className="flex flex-col gap-4 border-b border-white/10 pb-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="text-xl font-semibold text-white">Preview</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">
+                    Live render updates after {PREVIEW_DEBOUNCE_MS}ms debounce
+                    and reflects the selected target platform.
+                  </p>
+                </div>
+
+                <div className="flex gap-2">
+                  {(["telegram", "vk"] as const).map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      className={[
+                        "rounded-full border px-4 py-2 text-sm font-medium transition",
+                        previewPlatform === item
+                          ? "border-teal-400/70 bg-teal-400/15 text-teal-100"
+                          : "border-white/10 bg-white/5 text-slate-300",
+                      ].join(" ")}
+                      onClick={() => setPreviewPlatform(item)}
+                    >
+                      {item === "telegram" ? "Telegram" : "VK"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={[
+                    "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]",
+                    charCountClasses(previewQuery.data),
+                  ].join(" ")}
+                  data-char-count={previewCharCount}
+                >
+                  {previewCharCount} chars
+                </span>
+                <PresenceBadge
+                  label={previewQuery.isFetching ? "Updating" : "Live"}
+                  active={!previewQuery.isFetching}
+                />
+                <PresenceBadge
+                  label={`Issues ${previewIssues.length}`}
+                  active={previewIssues.length > 0}
+                />
+              </div>
+            </div>
+
+            {previewQuery.isLoading ? (
+              <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 text-sm text-slate-300">
+                Building preview from draft payload...
+              </div>
+            ) : null}
+
+            {previewQuery.isError ? (
+              <div className="rounded-2xl border border-rose-400/30 bg-rose-400/10 p-5 text-sm text-rose-100">
+                Preview request failed. Keep editing and retry after the next
+                valid payload.
+              </div>
+            ) : null}
+
+            {previewQuery.data ? (
+              <div className="space-y-5">
+                <div
+                  className={[
+                    "rounded-[28px] border p-5 shadow-xl",
+                    previewPlatform === "telegram"
+                      ? "border-cyan-400/20 bg-gradient-to-br from-cyan-400/12 to-slate-950/80"
+                      : "border-indigo-400/20 bg-gradient-to-br from-indigo-400/12 to-slate-950/80",
+                  ].join(" ")}
+                >
+                  <div className="mb-4 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-slate-400">
+                    <span>
+                      {previewPlatform === "telegram"
+                        ? "Telegram render"
+                        : "VK render"}
+                    </span>
+                    <span>{previewQuery.data.platform ?? previewPlatform}</span>
+                  </div>
+
+                  {previewPlatform === "telegram" ? (
+                    <div
+                      data-preview-body="telegram"
+                      className="space-y-3 rounded-[24px] bg-slate-950/70 p-5 text-sm leading-7 text-slate-100"
+                      dangerouslySetInnerHTML={{
+                        __html: previewQuery.data.rendered_text.replace(
+                          /\n/g,
+                          "<br />",
+                        ),
+                      }}
+                    />
+                  ) : (
+                    <pre
+                      data-preview-body="vk"
+                      className="whitespace-pre-wrap rounded-[24px] bg-slate-950/70 p-5 text-sm leading-7 text-slate-100"
+                    >
+                      {previewQuery.data.rendered_text}
+                    </pre>
+                  )}
+                </div>
+
+                {previewQuery.data.poll ? (
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
+                        Poll preview
+                      </h4>
+                      <PresenceBadge label="Poll" />
+                    </div>
+                    <p className="mt-4 text-base font-semibold text-white">
+                      {previewQuery.data.poll.question}
+                    </p>
+                    <div className="mt-4 grid gap-2">
+                      {previewQuery.data.poll.options.map((option) => (
+                        <div
+                          key={option}
+                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200"
+                        >
+                          {option}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {formValues.hasImage || formValues.imagePrompt.trim() ? (
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
+                        Image preview
+                      </h4>
+                      <PresenceBadge
+                        label={formValues.hasImage ? "Attached" : "Prompt ready"}
+                      />
+                    </div>
+                    <div className="mt-4 rounded-[24px] border border-dashed border-white/10 bg-gradient-to-br from-white/5 to-transparent p-8 text-center text-sm text-slate-400">
+                      {formValues.hasImage
+                        ? "Image file is attached to this draft."
+                        : "Image prompt is ready; generation UI lands in #23."}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
+                      Validation
+                    </h4>
+                    <span
+                      className="text-sm text-slate-400"
+                      data-validation-count={previewIssues.length}
+                    >
+                      {previewIssues.length} issues
+                    </span>
+                  </div>
+
+                  {previewIssues.length > 0 ? (
+                    <div className="mt-4 space-y-3">
+                      {previewIssues.map((issue) => (
+                        <div
+                          key={`${issue.level}-${issue.code}`}
+                          className={[
+                            "rounded-2xl border px-4 py-3 text-sm",
+                            validationClasses(issue.level),
+                          ].join(" ")}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-semibold uppercase tracking-[0.14em]">
+                              {issue.level}
+                            </span>
+                            <span className="text-xs uppercase tracking-[0.14em] opacity-70">
+                              {issue.code}
+                            </span>
+                          </div>
+                          <p className="mt-2 leading-6">{issue.message}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-4 text-sm text-slate-400">
+                      No validation issues for the current preview payload.
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </section>
         </div>
       </div>
     </div>

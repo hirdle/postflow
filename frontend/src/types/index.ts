@@ -5,6 +5,7 @@ export type PublishStatus =
   | "published"
   | "failed"
   | "cancelled";
+export type ValidationLevel = "error" | "warning" | "info";
 
 export interface PlaceholderCardProps {
   title: string;
@@ -38,6 +39,20 @@ export interface PostDetail extends PostListItem {
   poll: PollData | null;
   image_prompt: string | null;
   raw_markdown: string;
+}
+
+export interface ValidationIssue {
+  level: ValidationLevel;
+  code: string;
+  message: string;
+}
+
+export interface PreviewResponse {
+  rendered_text: string;
+  poll: PollData | null;
+  validation: ValidationIssue[];
+  char_count: number;
+  platform: Platform | null;
 }
 
 export interface SettingsFormValues {
