@@ -58,7 +58,13 @@ export function SchedulesPage() {
         message: `Cancelled schedule for ${item.file_name}.`,
       });
     },
-    onError: (error) => {
+    onError: async (error, item) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["schedules"] }),
+        queryClient.invalidateQueries({ queryKey: ["posts"] }),
+        queryClient.invalidateQueries({ queryKey: ["post", item.file_name] }),
+      ]);
+
       pushToast({
         tone: "error",
         message:
@@ -96,7 +102,15 @@ export function SchedulesPage() {
         message: `Rescheduled ${record.file_name} to ${record.scheduled_date} ${record.scheduled_time}.`,
       });
     },
-    onError: (error) => {
+    onError: async (error, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["schedules"] }),
+        queryClient.invalidateQueries({ queryKey: ["posts"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["post", variables.item.file_name],
+        }),
+      ]);
+
       pushToast({
         tone: "error",
         message:
@@ -112,6 +126,7 @@ export function SchedulesPage() {
       `${right.scheduled_date}T${right.scheduled_time}`,
     ),
   );
+  const hasLoadedSchedules = schedulesQuery.data !== undefined;
 
   const cancelingRecordId = cancelMutation.variables?.id ?? null;
   const reschedulingRecordId = rescheduleMutation.variables?.item.id ?? null;
@@ -138,7 +153,9 @@ export function SchedulesPage() {
       return;
     }
 
-    await cancelMutation.mutateAsync(item);
+    try {
+      await cancelMutation.mutateAsync(item);
+    } catch {}
   }
 
   async function handleReschedule(item: ScheduledPost) {
@@ -150,11 +167,13 @@ export function SchedulesPage() {
       return;
     }
 
-    await rescheduleMutation.mutateAsync({
-      item,
-      scheduled_date: rescheduleDate,
-      scheduled_time: rescheduleTime,
-    });
+    try {
+      await rescheduleMutation.mutateAsync({
+        item,
+        scheduled_date: rescheduleDate,
+        scheduled_time: rescheduleTime,
+      });
+    } catch {}
   }
 
   return (
@@ -195,7 +214,7 @@ export function SchedulesPage() {
       ) : null}
 
       {!schedulesQuery.isLoading &&
-      !schedulesQuery.isError &&
+      hasLoadedSchedules &&
       items.length === 0 ? (
         <section
           className="rounded-3xl border border-dashed border-white/10 bg-slate-950/40 p-8 text-center"
@@ -217,9 +236,7 @@ export function SchedulesPage() {
         </section>
       ) : null}
 
-      {!schedulesQuery.isLoading &&
-      !schedulesQuery.isError &&
-      items.length > 0 ? (
+      {hasLoadedSchedules && items.length > 0 ? (
         <section className="space-y-4">
           {items.map((item) => {
             const isEditing = editingRecordId === item.id;
