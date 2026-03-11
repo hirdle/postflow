@@ -66,6 +66,15 @@ export interface PostDetail extends PostListItem {
   publish_attempts: PublishAttempt[];
 }
 
+export interface ScheduledPost {
+  id: number;
+  file_name: string;
+  platform: Platform;
+  scheduled_date: string;
+  scheduled_time: string;
+  status: PublishStatus;
+}
+
 export interface ValidationIssue {
   level: ValidationLevel;
   code: string;
