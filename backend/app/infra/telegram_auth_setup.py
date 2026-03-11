@@ -13,7 +13,7 @@ from getpass import getpass
 import qrcode
 from telethon import TelegramClient, errors
 
-from app.infra.telegram_client import load_telegram_settings
+from app.infra.telegram_client import load_telegram_auth_settings
 
 
 def _print_qr(url: str) -> None:
@@ -25,7 +25,7 @@ def _print_qr(url: str) -> None:
 
 async def main() -> None:
     try:
-        settings = await load_telegram_settings()
+        settings = await load_telegram_auth_settings()
     except ValueError as exc:
         print(f"Error: {exc}")
         sys.exit(1)

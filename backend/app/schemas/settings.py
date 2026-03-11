@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -19,3 +22,32 @@ class SettingsResponse(BaseModel):
 
 class SettingsUpdate(SettingsResponse):
     pass
+
+
+TelegramSessionStatus = Literal[
+    "waiting_for_scan",
+    "password_required",
+    "authorized",
+    "expired",
+    "failed",
+    "cancelled",
+]
+
+
+class TelegramSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    session_id: str
+    status: TelegramSessionStatus
+    started_at: datetime
+    expires_at: datetime | None = None
+    qr_url: str | None = None
+    qr_image_data_url: str | None = None
+    error: str | None = None
+    account_label: str | None = None
+
+
+class TelegramSessionPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    password: str

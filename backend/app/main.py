@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import api_routers
 from app.config import ensure_runtime_directories, get_settings
+from app.infra.telegram_qr_auth import get_telegram_qr_auth_manager
 
 
 @asynccontextmanager
@@ -15,7 +16,10 @@ async def lifespan(_: FastAPI):
     from app.infra.database import initialize_database
 
     await initialize_database()
-    yield
+    try:
+        yield
+    finally:
+        await get_telegram_qr_auth_manager().shutdown()
 
 
 def create_app() -> FastAPI:

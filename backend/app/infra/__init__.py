@@ -11,9 +11,16 @@ from app.infra.image_api_client import (
 from app.infra.telegram_client import (
     DEFAULT_TELEGRAM_SESSION_PATH,
     MSK,
+    TelegramAuthSettings,
     TelegramPublisher,
     TelegramSettings,
+    load_telegram_auth_settings,
     load_telegram_settings,
+)
+from app.infra.telegram_qr_auth import (
+    TelegramQrAuthManager,
+    TelegramQrAuthSnapshot,
+    get_telegram_qr_auth_manager,
 )
 from app.infra.vk_client import (
     VK_API_BASE,
@@ -31,13 +38,18 @@ __all__ = [
     "ImageApiClient",
     "ImageApiSettings",
     "MSK",
+    "TelegramAuthSettings",
     "TelegramPublisher",
+    "TelegramQrAuthManager",
+    "TelegramQrAuthSnapshot",
     "TelegramSettings",
     "VK_API_BASE",
     "VK_API_VERSION",
     "VKClient",
     "VKSettings",
+    "get_telegram_qr_auth_manager",
     "load_image_api_settings",
+    "load_telegram_auth_settings",
     "load_telegram_settings",
     "load_vk_settings",
 ]

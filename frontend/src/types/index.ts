@@ -114,3 +114,22 @@ export interface SettingsFormValues {
   image_base_url: string;
   image_default_model: string;
 }
+
+export type TelegramSessionStatus =
+  | "waiting_for_scan"
+  | "password_required"
+  | "authorized"
+  | "expired"
+  | "failed"
+  | "cancelled";
+
+export interface TelegramSessionState {
+  session_id: string;
+  status: TelegramSessionStatus;
+  started_at: string;
+  expires_at: string | null;
+  qr_url: string | null;
+  qr_image_data_url: string | null;
+  error: string | null;
+  account_label: string | null;
+}

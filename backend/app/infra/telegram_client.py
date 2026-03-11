@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from telethon import TelegramClient
 from telethon.tl.functions.messages import DeleteScheduledMessagesRequest
@@ -12,10 +12,12 @@ from telethon.tl.types import InputMediaPoll, Poll, PollAnswer, TextWithEntities
 from app.config import get_settings
 from app.infra.database import get_db
 
-TELEGRAM_SETTINGS_KEYS = (
+TELEGRAM_AUTH_SETTINGS_KEYS = (
     "telegram_api_id",
     "telegram_api_hash",
     "telegram_session_path",
+)
+TELEGRAM_SETTINGS_KEYS = TELEGRAM_AUTH_SETTINGS_KEYS + (
     "telegram_channel",
 )
 DEFAULT_TELEGRAM_SESSION_PATH = "data/biovolt"
@@ -23,46 +25,79 @@ MSK = timezone(timedelta(hours=3))
 
 
 @dataclass(frozen=True, slots=True)
-class TelegramSettings:
+class TelegramAuthSettings:
     api_id: int
     api_hash: str
     session_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramSettings(TelegramAuthSettings):
     channel: str
 
 
+async def load_telegram_auth_settings(
+    db_path: Path | None = None,
+) -> TelegramAuthSettings:
+    settings_map = await _load_settings_map(TELEGRAM_AUTH_SETTINGS_KEYS, db_path)
+    return _build_telegram_auth_settings(settings_map)
+
+
 async def load_telegram_settings(db_path: Path | None = None) -> TelegramSettings:
+    settings_map = await _load_settings_map(TELEGRAM_SETTINGS_KEYS, db_path)
+    auth_settings = _build_telegram_auth_settings(settings_map)
+    channel = (settings_map["telegram_channel"] or "").strip()
+
+    if not channel:
+        raise ValueError("Telegram channel is not configured in app_settings.")
+
+    return TelegramSettings(
+        api_id=auth_settings.api_id,
+        api_hash=auth_settings.api_hash,
+        session_path=auth_settings.session_path,
+        channel=channel,
+    )
+
+
+async def _load_settings_map(
+    keys: Sequence[str],
+    db_path: Path | None = None,
+) -> dict[str, str | None]:
     async with get_db(db_path) as db:
         cursor = await db.execute(
-            "SELECT key, value FROM app_settings WHERE key IN (?, ?, ?, ?)",
-            TELEGRAM_SETTINGS_KEYS,
+            "SELECT key, value FROM app_settings WHERE key IN ({})".format(
+                ", ".join("?" for _ in keys)
+            ),
+            tuple(keys),
         )
         rows = await cursor.fetchall()
 
-    settings_map = {key: None for key in TELEGRAM_SETTINGS_KEYS}
+    settings_map = {key: None for key in keys}
     settings_map.update({row["key"]: row["value"] for row in rows})
+    return settings_map
 
+
+def _build_telegram_auth_settings(
+    settings_map: dict[str, str | None],
+) -> TelegramAuthSettings:
     api_id_raw = (settings_map["telegram_api_id"] or "").strip()
     api_hash = (settings_map["telegram_api_hash"] or "").strip()
-    channel = (settings_map["telegram_channel"] or "").strip()
     session_path = _resolve_session_path(settings_map["telegram_session_path"])
 
     if not api_id_raw:
         raise ValueError("Telegram API ID is not configured in app_settings.")
     if not api_hash:
         raise ValueError("Telegram API hash is not configured in app_settings.")
-    if not channel:
-        raise ValueError("Telegram channel is not configured in app_settings.")
 
     try:
         api_id = int(api_id_raw)
     except ValueError as exc:
         raise ValueError("Telegram API ID must be an integer.") from exc
 
-    return TelegramSettings(
+    return TelegramAuthSettings(
         api_id=api_id,
         api_hash=api_hash,
         session_path=session_path,
-        channel=channel,
     )
 
 

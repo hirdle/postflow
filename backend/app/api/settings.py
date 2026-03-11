@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
+from app.infra.telegram_qr_auth import get_telegram_qr_auth_manager
 from app.infra.database import get_db
-from app.schemas.settings import SettingsResponse, SettingsUpdate
+from app.schemas.settings import (
+    SettingsResponse,
+    SettingsUpdate,
+    TelegramSessionPasswordRequest,
+    TelegramSessionResponse,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -60,6 +66,76 @@ async def update_settings(payload: SettingsUpdate) -> SettingsResponse:
 
     refreshed = await _load_settings_map()
     return SettingsResponse(**_mask_settings(refreshed))
+
+
+@router.post(
+    "/telegram/session",
+    response_model=TelegramSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_telegram_session() -> TelegramSessionResponse:
+    manager = get_telegram_qr_auth_manager()
+
+    try:
+        snapshot = await manager.start()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return TelegramSessionResponse.model_validate(snapshot)
+
+
+@router.get(
+    "/telegram/session/{session_id}",
+    response_model=TelegramSessionResponse,
+)
+async def get_telegram_session(session_id: str) -> TelegramSessionResponse:
+    manager = get_telegram_qr_auth_manager()
+
+    try:
+        snapshot = await manager.get(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram session not found.") from exc
+
+    return TelegramSessionResponse.model_validate(snapshot)
+
+
+@router.post(
+    "/telegram/session/{session_id}/password",
+    response_model=TelegramSessionResponse,
+)
+async def submit_telegram_session_password(
+    session_id: str,
+    payload: TelegramSessionPasswordRequest,
+) -> TelegramSessionResponse:
+    manager = get_telegram_qr_auth_manager()
+
+    try:
+        snapshot = await manager.submit_password(session_id, payload.password)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram session not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return TelegramSessionResponse.model_validate(snapshot)
+
+
+@router.delete(
+    "/telegram/session/{session_id}",
+    response_model=TelegramSessionResponse,
+)
+async def cancel_telegram_session(session_id: str) -> TelegramSessionResponse:
+    manager = get_telegram_qr_auth_manager()
+
+    try:
+        snapshot = await manager.cancel(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Telegram session not found.") from exc
+
+    return TelegramSessionResponse.model_validate(snapshot)
 
 
 async def _load_settings_map() -> dict[str, str | None]:
