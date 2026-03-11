@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
 import { apiFetch } from "../api/client";
+import { formatScheduleValue } from "../lib/format";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
 import { StatusBadge } from "../components/StatusBadge";
@@ -11,18 +12,18 @@ import type { Platform, PostListItem, PublishStatus } from "../types";
 const SEARCH_DEBOUNCE_MS = 350;
 
 const PLATFORM_OPTIONS: Array<{ value: "all" | Platform; label: string }> = [
-  { value: "all", label: "All platforms" },
+  { value: "all", label: "Все платформы" },
   { value: "telegram", label: "Telegram" },
   { value: "vk", label: "VK" },
 ];
 
 const STATUS_OPTIONS: Array<{ value: "all" | PublishStatus; label: string }> = [
-  { value: "all", label: "All statuses" },
-  { value: "draft", label: "Draft" },
-  { value: "scheduled", label: "Scheduled" },
-  { value: "published", label: "Published" },
-  { value: "failed", label: "Failed" },
-  { value: "cancelled", label: "Cancelled" },
+  { value: "all", label: "Все статусы" },
+  { value: "draft", label: "Черновики" },
+  { value: "scheduled", label: "Запланированные" },
+  { value: "published", label: "Опубликованные" },
+  { value: "failed", label: "С ошибкой" },
+  { value: "cancelled", label: "Отмененные" },
 ];
 
 function buildPostsPath(filters: {
@@ -59,16 +60,32 @@ function buildPostsPath(filters: {
 }
 
 function formatSchedule(post: PostListItem) {
-  if (post.date && post.time) {
-    return `${post.date} • ${post.time}`;
+  return formatScheduleValue(post.date, post.time);
+}
+
+function formatPostType(value: string | null) {
+  if (!value) {
+    return "Без типа";
   }
-  if (post.date) {
-    return post.date;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "educational") {
+    return "Образовательный";
   }
-  if (post.time) {
-    return post.time;
+  if (normalized === "engagement") {
+    return "Вовлекающий";
   }
-  return "No schedule";
+  if (normalized === "conversion") {
+    return "Конверсионный";
+  }
+  if (normalized === "lifestyle") {
+    return "Имиджевый";
+  }
+  if (normalized === "news") {
+    return "Новостной";
+  }
+
+  return value;
 }
 
 export function PostListPage() {
@@ -145,16 +162,16 @@ export function PostListPage() {
 
   return (
     <div className="space-y-6">
-      <section className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-gradient-to-br from-white/8 to-transparent p-6 lg:flex-row lg:items-center lg:justify-between">
+      <section className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-orange-50 p-6 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <p className="text-sm uppercase tracking-[0.24em] text-orange-300/70">
-            Posts overview
+          <p className="text-sm uppercase tracking-[0.24em] text-orange-700/70">
+            Лента публикаций
           </p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">
-            Real posts list is now driven by the backend API
+          <h2 className="mt-2 text-2xl font-semibold text-slate-950">
+            Список постов синхронизирован с API бэкенда
           </h2>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
-            Список использует `GET /api/posts` и уже умеет фильтровать по
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+            Раздел использует `GET /api/posts` и уже фильтрует материалы по
             платформе, статусу, рубрике, датам и поисковому запросу.
           </p>
         </div>
@@ -162,31 +179,33 @@ export function PostListPage() {
         <div className="flex flex-col gap-2 sm:items-end">
           <Link
             to="/posts/new"
-            className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300"
+            className="inline-flex items-center justify-center rounded-full bg-teal-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-500"
           >
-            Create draft
+            Создать черновик
           </Link>
-          <p className="text-sm text-slate-400">
-            {postsQuery.data?.length ?? 0} posts
-            {postsQuery.isFetching && !postsQuery.isLoading ? " • Updating…" : ""}
+          <p className="text-sm text-slate-500">
+            {postsQuery.data?.length ?? 0} постов
+            {postsQuery.isFetching && !postsQuery.isLoading
+              ? " • обновляем список…"
+              : ""}
           </p>
         </div>
       </section>
 
-      <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-col gap-2 border-b border-white/10 pb-4">
-          <h3 className="text-xl font-semibold text-white">Filters</h3>
-          <p className="text-sm leading-6 text-slate-300">
-            Поиск обновляется с debounce {SEARCH_DEBOUNCE_MS}ms и отправляет
-            фильтры прямо в backend query string.
+      <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-slate-200 pb-4">
+          <h3 className="text-xl font-semibold text-slate-950">Фильтры</h3>
+          <p className="text-sm leading-6 text-slate-600">
+            Поиск обновляется с debounce {SEARCH_DEBOUNCE_MS} мс и отправляет
+            параметры напрямую в query string запроса.
           </p>
         </div>
 
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <label className="flex flex-col gap-2">
-            <span className="text-sm text-slate-300">Platform</span>
+            <span className="text-sm text-slate-600">Платформа</span>
             <select
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
               value={platformFilter}
               onChange={(event) =>
                 setPlatformFilter(event.target.value as "all" | Platform)
@@ -201,9 +220,9 @@ export function PostListPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="text-sm text-slate-300">Status</span>
+            <span className="text-sm text-slate-600">Статус</span>
             <select
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
               value={statusFilter}
               onChange={(event) =>
                 setStatusFilter(event.target.value as "all" | PublishStatus)
@@ -218,14 +237,14 @@ export function PostListPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="text-sm text-slate-300">Rubric</span>
+            <span className="text-sm text-slate-600">Рубрика</span>
             <select
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60 disabled:cursor-not-allowed disabled:text-slate-500"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:cursor-not-allowed disabled:text-slate-400"
               value={rubricFilter}
               onChange={(event) => setRubricFilter(event.target.value)}
               disabled={rubricOptionsQuery.isLoading && rubrics.length === 0}
             >
-              <option value="all">All rubrics</option>
+              <option value="all">Все рубрики</option>
               {rubrics.map((rubric) => (
                 <option key={rubric} value={rubric}>
                   {rubric}
@@ -235,9 +254,9 @@ export function PostListPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="text-sm text-slate-300">Date from</span>
+            <span className="text-sm text-slate-600">Дата с</span>
             <input
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
               type="date"
               value={dateFrom}
               max={dateTo || undefined}
@@ -246,9 +265,9 @@ export function PostListPage() {
           </label>
 
           <label className="flex flex-col gap-2">
-            <span className="text-sm text-slate-300">Date to</span>
+            <span className="text-sm text-slate-600">Дата по</span>
             <input
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
               type="date"
               value={dateTo}
               min={dateFrom || undefined}
@@ -257,42 +276,43 @@ export function PostListPage() {
           </label>
 
           <label className="flex flex-col gap-2 md:col-span-2 xl:col-span-1">
-            <span className="text-sm text-slate-300">Search</span>
+            <span className="text-sm text-slate-600">Поиск</span>
             <input
-              className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
               type="search"
               value={searchInput}
-              placeholder="Title or body"
+              placeholder="Заголовок или текст"
               onChange={(event) => setSearchInput(event.target.value)}
             />
           </label>
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-400">
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
           <span>
-            Search term in request: {debouncedSearch ? `"${debouncedSearch}"` : "none"}
+            Поисковый запрос: {debouncedSearch ? `"${debouncedSearch}"` : "не задан"}
           </span>
           {hasActiveFilters ? (
             <button
               type="button"
-              className="rounded-full border border-white/10 px-4 py-2 text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+              className="rounded-full border border-slate-200 px-4 py-2 text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
               onClick={resetFilters}
             >
-              Clear filters
+              Сбросить фильтры
             </button>
           ) : null}
         </div>
       </section>
 
       {postsQuery.isLoading ? (
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-slate-300">
-          Loading posts from backend...
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 text-slate-600 shadow-sm">
+          Загружаем список постов из бэкенда…
         </section>
       ) : null}
 
       {postsQuery.isError ? (
-        <section className="rounded-3xl border border-rose-400/30 bg-rose-400/10 p-6 text-rose-100">
-          Failed to load posts. Check backend availability and try again.
+        <section className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-rose-900 shadow-sm">
+          Не удалось загрузить посты. Проверьте доступность бэкенда и повторите
+          попытку.
         </section>
       ) : null}
 
@@ -303,22 +323,22 @@ export function PostListPage() {
               <Link
                 key={post.file_name}
                 to={`/posts/${post.file_name}`}
-                className="block rounded-2xl border border-white/10 bg-slate-950/40 p-5 transition hover:border-teal-400/40 hover:bg-slate-950/70"
+                className="block rounded-2xl border border-slate-200 bg-white/90 p-5 shadow-sm transition hover:border-teal-200 hover:bg-white"
               >
                 <article className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div className="space-y-3">
-                    <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
+                    <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
                       <span>{formatSchedule(post)}</span>
-                      <span className="h-1 w-1 rounded-full bg-white/20" />
+                      <span className="h-1 w-1 rounded-full bg-slate-300" />
                       <span>{post.file_name}</span>
                     </div>
 
                     <div>
-                      <h3 className="text-lg font-semibold text-white">
-                        {post.title || "Untitled draft"}
+                      <h3 className="text-lg font-semibold text-slate-950">
+                        {post.title || "Черновик без заголовка"}
                       </h3>
-                      <p className="mt-2 text-sm leading-6 text-slate-300">
-                        {post.rubric || "Без рубрики"} • {post.post_type || "Без типа"}
+                      <p className="mt-2 text-sm leading-6 text-slate-600">
+                        {post.rubric || "Без рубрики"} • {formatPostType(post.post_type)}
                       </p>
                     </div>
                   </div>
@@ -328,21 +348,23 @@ export function PostListPage() {
                     {post.platform ? (
                       <PlatformBadge platform={post.platform} />
                     ) : (
-                      <PresenceBadge label="Platform n/a" active={false} />
+                      <PresenceBadge label="Платформа не выбрана" active={false} />
                     )}
-                    <PresenceBadge label="Image" active={post.has_image} />
-                    <PresenceBadge label="Poll" active={post.has_poll} />
+                    <PresenceBadge label="Изображение" active={post.has_image} />
+                    <PresenceBadge label="Опрос" active={post.has_poll} />
                   </div>
                 </article>
               </Link>
             ))}
           </section>
         ) : (
-          <section className="rounded-3xl border border-dashed border-white/10 bg-white/5 p-10 text-center">
-            <h3 className="text-xl font-semibold text-white">No posts found</h3>
-            <p className="mt-3 text-sm leading-6 text-slate-300">
+          <section className="rounded-3xl border border-dashed border-slate-300 bg-white/80 p-10 text-center shadow-sm">
+            <h3 className="text-xl font-semibold text-slate-950">
+              Посты не найдены
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
               Текущие фильтры не вернули результатов. Очистите фильтры или
-              создайте новый draft.
+              создайте новый черновик.
             </p>
           </section>
         )

@@ -36,7 +36,7 @@ const SECTION_FIELDS: Array<{
 }> = [
   {
     title: "Telegram",
-    description: "Авторизация и channel routing для Telethon publisher.",
+    description: "Авторизация и маршрут публикации для Telethon-клиента.",
     fields: [
       {
         key: "telegram_api_id",
@@ -52,51 +52,51 @@ const SECTION_FIELDS: Array<{
       },
       {
         key: "telegram_session_path",
-        label: "Session Path",
+        label: "Путь к сессии",
         placeholder: "data/biovolt",
       },
       {
         key: "telegram_channel",
-        label: "Channel",
+        label: "Канал",
         placeholder: "@biovoltru_channel",
       },
     ],
   },
   {
     title: "VK",
-    description: "Доступ к VK wall publishing и group targeting.",
+    description: "Доступ к публикациям на стене и к настройкам группы.",
     fields: [
       {
         key: "vk_access_token",
-        label: "Access Token",
+        label: "Токен доступа",
         placeholder: "vk1.a....",
         secret: true,
       },
       {
         key: "vk_group_id",
-        label: "Group ID",
+        label: "ID группы",
         placeholder: "123456",
       },
     ],
   },
   {
-    title: "Image API",
-    description: "Параметры внешнего image generation endpoint.",
+    title: "Генерация изображений",
+    description: "Параметры внешнего сервиса генерации изображений.",
     fields: [
       {
         key: "image_api_key",
-        label: "API Key",
+        label: "API-ключ",
         placeholder: "sk-...",
         secret: true,
       },
       {
         key: "image_base_url",
-        label: "Base URL",
+        label: "Базовый URL",
         placeholder: "https://api.hydraai.ru/v1/",
       },
       {
         key: "image_default_model",
-        label: "Default Model",
+        label: "Модель по умолчанию",
         placeholder: "hydra-banana",
       },
     ],
@@ -149,12 +149,12 @@ export function SettingsPage() {
       setInitialValues(normalized);
       pushToast({
         tone: "success",
-        message: "Settings saved and reloaded from backend.",
+        message: "Настройки сохранены и перечитаны из бэкенда.",
       });
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Unknown settings save error.";
+        error instanceof Error ? error.message : "Не удалось сохранить настройки.";
       pushToast({ tone: "error", message });
     },
   });
@@ -204,7 +204,7 @@ export function SettingsPage() {
     if (Object.keys(payload).length === 0) {
       pushToast({
         tone: "warning",
-        message: "No changed settings to save.",
+        message: "Нет изменений для сохранения.",
       });
       return;
     }
@@ -214,29 +214,30 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-white/10 bg-gradient-to-br from-white/8 to-transparent p-6">
-        <p className="text-sm uppercase tracking-[0.24em] text-teal-300/70">
-          Settings
+      <section className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-teal-50 p-6 shadow-sm">
+        <p className="text-sm uppercase tracking-[0.24em] text-teal-700/70">
+          Настройки
         </p>
-        <h2 className="mt-2 text-2xl font-semibold text-white">
-          Credentials and API configuration
+        <h2 className="mt-2 text-2xl font-semibold text-slate-950">
+          Доступы и конфигурация API
         </h2>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-          Страница подключена к backend `GET/PUT /api/settings`. Secret fields
-          приходят masked, а сохранение отправляет только реально изменённые
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+          Страница подключена к `GET/PUT /api/settings`. Секреты приходят в
+          маскированном виде, а сохранение отправляет только реально измененные
           значения.
         </p>
       </section>
 
       {settingsQuery.isLoading ? (
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-slate-300">
-          Loading settings from backend...
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 text-slate-600 shadow-sm">
+          Загружаем настройки из бэкенда…
         </section>
       ) : null}
 
       {settingsQuery.isError ? (
-        <section className="rounded-3xl border border-rose-400/30 bg-rose-400/10 p-6 text-rose-100">
-          Failed to load settings. Refresh the page after backend recovery.
+        <section className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-rose-900 shadow-sm">
+          Не удалось загрузить настройки. Обновите страницу после восстановления
+          бэкенда.
         </section>
       ) : null}
 
@@ -245,13 +246,13 @@ export function SettingsPage() {
           {SECTION_FIELDS.map((section) => (
             <section
               key={section.title}
-              className="rounded-3xl border border-white/10 bg-white/5 p-6"
+              className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm"
             >
-              <div className="border-b border-white/10 pb-4">
-                <h3 className="text-xl font-semibold text-white">
+              <div className="border-b border-slate-200 pb-4">
+                <h3 className="text-xl font-semibold text-slate-950">
                   {section.title}
                 </h3>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
+                <p className="mt-2 text-sm leading-6 text-slate-600">
                   {section.description}
                 </p>
               </div>
@@ -263,15 +264,15 @@ export function SettingsPage() {
                   return (
                     <label
                       key={field.key}
-                      className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-slate-950/40 p-4"
+                      className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4"
                     >
-                      <span className="text-sm font-medium text-slate-200">
+                      <span className="text-sm font-medium text-slate-700">
                         {field.label}
                       </span>
 
                       <div className="flex gap-2">
                         <input
-                          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
+                          className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
                           type={isSecret && !isVisible ? "password" : "text"}
                           value={formValues[field.key]}
                           placeholder={field.placeholder}
@@ -283,10 +284,10 @@ export function SettingsPage() {
                         {isSecret ? (
                           <button
                             type="button"
-                            className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
                             onClick={() => toggleVisibility(field.key)}
                           >
-                            {isVisible ? "Hide" : "Show"}
+                            {isVisible ? "Скрыть" : "Показать"}
                           </button>
                         ) : null}
                       </div>
@@ -297,19 +298,19 @@ export function SettingsPage() {
             </section>
           ))}
 
-          <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-slate-950/50 p-5 md:flex-row md:items-center md:justify-between">
-            <p className="text-sm text-slate-300">
+          <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50/90 p-5 md:flex-row md:items-center md:justify-between shadow-sm">
+            <p className="text-sm text-slate-600">
               {isDirty
-                ? "Unsaved changes detected."
-                : "No pending settings changes."}
+                ? "Есть несохраненные изменения."
+                : "Все настройки синхронизированы."}
             </p>
 
             <button
               type="submit"
-              className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              className="inline-flex items-center justify-center rounded-full bg-teal-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
               disabled={!isDirty || updateMutation.isPending}
             >
-              {updateMutation.isPending ? "Saving..." : "Save settings"}
+              {updateMutation.isPending ? "Сохраняем…" : "Сохранить настройки"}
             </button>
           </div>
         </form>

@@ -7,6 +7,9 @@ import {
 import { useNavigate, useParams } from "react-router-dom";
 
 import { apiFetch, buildApiUrl } from "../api/client";
+import { formatBackendErrorMessage } from "../lib/errors";
+import { formatScheduleValue } from "../lib/format";
+import { formatValidationIssueMessage } from "../lib/validation";
 import { PlatformBadge } from "../components/PlatformBadge";
 import { PresenceBadge } from "../components/PresenceBadge";
 import { PublishDialog } from "../components/PublishDialog";
@@ -184,11 +187,13 @@ function buildPreviewPayload(
 }
 
 function formatEditorTitle(filename: string | undefined) {
-  return filename ? `Editing: ${filename}` : "New post";
+  return filename ? `Редактирование: ${filename}` : "Новый пост";
 }
 
 function formatAsyncError(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  return error instanceof Error
+    ? formatBackendErrorMessage(error.message)
+    : fallback;
 }
 
 function buildMediaImageUrl(fileName: string, revision: number) {
@@ -197,12 +202,12 @@ function buildMediaImageUrl(fileName: string, revision: number) {
 
 function validationClasses(level: ValidationIssue["level"]) {
   if (level === "error") {
-    return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+    return "border-rose-200 bg-rose-50 text-rose-900";
   }
   if (level === "warning") {
-    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+    return "border-amber-200 bg-amber-50 text-amber-900";
   }
-  return "border-sky-400/30 bg-sky-400/10 text-sky-100";
+  return "border-sky-200 bg-sky-50 text-sky-900";
 }
 
 function charCountClasses(
@@ -210,12 +215,22 @@ function charCountClasses(
 ) {
   const issues = preview?.validation ?? [];
   if (issues.some((issue) => issue.level === "error")) {
-    return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+    return "border-rose-200 bg-rose-50 text-rose-900";
   }
   if (issues.some((issue) => issue.code === "post_length")) {
-    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+    return "border-amber-200 bg-amber-50 text-amber-900";
   }
-  return "border-teal-400/30 bg-teal-400/10 text-teal-100";
+  return "border-teal-200 bg-teal-50 text-teal-900";
+}
+
+function validationLevelLabel(level: ValidationIssue["level"]) {
+  if (level === "error") {
+    return "Ошибка";
+  }
+  if (level === "warning") {
+    return "Предупреждение";
+  }
+  return "Инфо";
 }
 
 function FieldShell({
@@ -231,7 +246,7 @@ function FieldShell({
 }) {
   return (
     <label className={`flex flex-col gap-2 ${className}`.trim()}>
-      <span className="text-sm font-medium text-slate-200">{label}</span>
+      <span className="text-sm font-medium text-slate-700">{label}</span>
       {children}
       {hint ? <span className="text-xs text-slate-500">{hint}</span> : null}
     </label>
@@ -382,17 +397,17 @@ export function PostEditorPage() {
       const payload = toSavePayload(formValues);
 
       if (!payload.date) {
-        throw new Error("Date is required.");
+        throw new Error("Нужно указать дату.");
       }
       if (!payload.platform) {
-        throw new Error("Platform is required.");
+        throw new Error("Нужно выбрать платформу.");
       }
       if (formValues.pollEnabled) {
         if (!payload.poll?.question) {
-          throw new Error("Poll question is required.");
+          throw new Error("Нужно заполнить вопрос опроса.");
         }
         if ((payload.poll.options ?? []).length < 2) {
-          throw new Error("Poll must contain at least 2 options.");
+          throw new Error("В опросе должно быть минимум 2 варианта.");
         }
       }
 
@@ -420,19 +435,18 @@ export function PostEditorPage() {
         navigate(`/posts/${savedPost.file_name}`, { replace: true });
         pushToast({
           tone: "success",
-          message: `Draft created: ${savedPost.file_name}`,
+          message: `Черновик создан: ${savedPost.file_name}`,
         });
         return;
       }
 
       pushToast({
         tone: "success",
-        message: "Post saved.",
+        message: "Пост сохранен.",
       });
     },
     onError: (error) => {
-      const message =
-        error instanceof Error ? error.message : "Failed to save post.";
+      const message = error instanceof Error ? error.message : "Не удалось сохранить пост.";
       pushToast({ tone: "error", message });
     },
   });
@@ -440,7 +454,7 @@ export function PostEditorPage() {
   const publishMutation = useMutation({
     mutationFn: async ({ schedule }: { schedule: boolean }) => {
       if (!filename) {
-        throw new Error("Save the draft before publishing.");
+        throw new Error("Сначала сохраните черновик.");
       }
 
       return apiFetch<PublishRecord>(`/publish/${encodeURIComponent(filename)}`, {
@@ -485,12 +499,12 @@ export function PostEditorPage() {
         tone: "success",
         message:
           record.status === "scheduled"
-            ? `Scheduled. Message ID: ${record.message_id ?? "pending"}.`
-            : `Published. Message ID: ${record.message_id ?? "pending"}.`,
+            ? `Пост поставлен в очередь. ID сообщения: ${record.message_id ?? "ожидается"}.`
+            : `Пост опубликован. ID сообщения: ${record.message_id ?? "ожидается"}.`,
       });
     },
     onError: (error) => {
-      const message = formatAsyncError(error, "Publish request failed.");
+      const message = formatAsyncError(error, "Запрос на публикацию завершился ошибкой.");
       setPublishError(message);
       setPublishResult(null);
       void Promise.all([
@@ -507,7 +521,7 @@ export function PostEditorPage() {
   const uploadImageMutation = useMutation({
     mutationFn: async (file: File) => {
       if (!filename) {
-        throw new Error("Save the draft before attaching an image.");
+        throw new Error("Сначала сохраните черновик, потом прикрепляйте изображение.");
       }
 
       const formData = new FormData();
@@ -531,11 +545,11 @@ export function PostEditorPage() {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       pushToast({
         tone: "success",
-        message: "Image uploaded and linked to the draft.",
+        message: "Изображение загружено и привязано к черновику.",
       });
     },
     onError: (error) => {
-      const message = formatAsyncError(error, "Failed to upload the image.");
+      const message = formatAsyncError(error, "Не удалось загрузить изображение.");
       setMediaError(message);
       pushToast({ tone: "error", message });
     },
@@ -544,12 +558,12 @@ export function PostEditorPage() {
   const generateImageMutation = useMutation({
     mutationFn: async () => {
       if (!filename) {
-        throw new Error("Save the draft before generating an image.");
+        throw new Error("Сначала сохраните черновик, потом запускайте генерацию.");
       }
 
       const prompt = formValues.imagePrompt.trim();
       if (!prompt) {
-        throw new Error("Image prompt is required before generation.");
+        throw new Error("Перед генерацией нужно заполнить промпт.");
       }
 
       return apiFetch<MediaGenerateResponse>("/media/generate", {
@@ -573,12 +587,12 @@ export function PostEditorPage() {
       pushToast({
         tone: "success",
         message: result.model
-          ? `Image generated with ${result.model}.`
-          : "Image generated with the backend default model.",
+          ? `Изображение сгенерировано моделью ${result.model}.`
+          : "Изображение сгенерировано моделью бэкенда по умолчанию.",
       });
     },
     onError: (error) => {
-      const message = formatAsyncError(error, "Image generation failed.");
+      const message = formatAsyncError(error, "Не удалось сгенерировать изображение.");
       setMediaError(message);
       pushToast({ tone: "error", message });
     },
@@ -587,7 +601,7 @@ export function PostEditorPage() {
   const deleteImageMutation = useMutation({
     mutationFn: async () => {
       if (!filename) {
-        throw new Error("Save the draft before deleting an image.");
+        throw new Error("Сначала сохраните черновик.");
       }
 
       await apiFetch<void>(`/media/${encodeURIComponent(filename)}`, {
@@ -604,11 +618,11 @@ export function PostEditorPage() {
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       pushToast({
         tone: "success",
-        message: "Attached image deleted.",
+        message: "Изображение удалено.",
       });
     },
     onError: (error) => {
-      const message = formatAsyncError(error, "Failed to delete the image.");
+      const message = formatAsyncError(error, "Не удалось удалить изображение.");
       setMediaError(message);
       pushToast({ tone: "error", message });
     },
@@ -730,7 +744,7 @@ export function PostEditorPage() {
 
   function handleImagePickerOpen() {
     if (!filename) {
-      const message = "Save the draft before attaching an image.";
+      const message = "Сначала сохраните черновик, потом прикрепляйте изображение.";
       setMediaError(message);
       pushToast({ tone: "warning", message });
       return;
@@ -770,7 +784,7 @@ export function PostEditorPage() {
     setIsImageDragActive(false);
 
     if (!filename) {
-      const message = "Save the draft before attaching an image.";
+      const message = "Сначала сохраните черновик, потом прикрепляйте изображение.";
       setMediaError(message);
       pushToast({ tone: "warning", message });
       return;
@@ -790,7 +804,7 @@ export function PostEditorPage() {
     }
 
     const shouldDelete = window.confirm(
-      "Delete the attached image for this draft?",
+      "Удалить прикрепленное изображение для этого черновика?",
     );
     if (!shouldDelete) {
       return;
@@ -851,13 +865,13 @@ export function PostEditorPage() {
       ? previewQuery.isError
         ? formatAsyncError(
             previewQuery.error,
-            "Could not refresh publish validation.",
+            "Не удалось обновить валидацию публикации.",
           )
         : null
       : publishValidationQuery.isError
         ? formatAsyncError(
             publishValidationQuery.error,
-            "Could not refresh publish validation.",
+            "Не удалось обновить валидацию публикации.",
           )
         : null;
   const previewCharCount = previewQuery.data?.char_count ?? 0;
@@ -878,7 +892,7 @@ export function PostEditorPage() {
   const mediaModelsError = mediaModelsQuery.isError
     ? formatAsyncError(
         mediaModelsQuery.error,
-        "Could not load image model options.",
+        "Не удалось загрузить список моделей для изображений.",
       )
     : null;
   const imagePreviewUrl =
@@ -887,28 +901,28 @@ export function PostEditorPage() {
       : null;
   const generatedImageName = filename
     ? `${filename.replace(/\.md$/, "")}.png`
-    : "Draft image";
+    : "Изображение черновика";
   const publicationStatus = postQuery.data?.status ?? formValues.status;
   const publishRecords = postQuery.data?.publish_records ?? [];
   const publishAttempts = postQuery.data?.publish_attempts ?? [];
 
   return (
     <div className="space-y-6">
-      <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
+      <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm uppercase tracking-[0.24em] text-orange-300/70">
-              Post editor
+            <p className="text-sm uppercase tracking-[0.24em] text-orange-700/70">
+              Редактор поста
             </p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">
+            <h2 className="mt-2 text-2xl font-semibold text-slate-950">
               {editorTitle}
             </h2>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-              Левая колонка редактирует draft поверх posts API, а правая уже
-              показывает live preview через `POST /api/preview`.
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+              Слева вы редактируете черновик через posts API, а справа сразу
+              видите превью из `POST /api/preview`.
             </p>
             <p className="mt-2 text-sm text-slate-500">
-              {filename ?? "Draft is not saved yet"}
+              {filename ?? "Черновик еще не сохранен"}
             </p>
           </div>
 
@@ -916,29 +930,29 @@ export function PostEditorPage() {
             <div className="flex flex-wrap gap-2">
               <StatusBadge status={publicationStatus} />
               <PlatformBadge platform={formValues.platform} />
-              <PresenceBadge label="Unsaved" active={isDirty} />
-              <PresenceBadge label="Image" active={formValues.hasImage} />
-              <PresenceBadge label="Poll" active={formValues.pollEnabled} />
+              <PresenceBadge label="Изменения" active={isDirty} />
+              <PresenceBadge label="Изображение" active={formValues.hasImage} />
+              <PresenceBadge label="Опрос" active={formValues.pollEnabled} />
             </div>
 
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
                 data-open-publish-dialog="true"
-                className="inline-flex items-center justify-center rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-slate-100 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-slate-900 disabled:text-slate-500"
+                className="inline-flex items-center justify-center rounded-full border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
                 disabled={!canOpenPublishDialog}
                 onClick={openPublishDialog}
               >
-                Publish
+                Публикация
               </button>
 
               <button
                 type="submit"
                 form="post-editor-form"
-                className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                className="inline-flex items-center justify-center rounded-full bg-teal-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                 disabled={saveMutation.isPending || postQuery.isLoading}
               >
-                {saveMutation.isPending ? "Saving..." : "Save post"}
+                {saveMutation.isPending ? "Сохраняем…" : "Сохранить пост"}
               </button>
             </div>
           </div>
@@ -946,14 +960,14 @@ export function PostEditorPage() {
       </section>
 
       {postQuery.isLoading ? (
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-slate-300">
-          Loading post from backend...
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 text-slate-600 shadow-sm">
+          Загружаем пост из бэкенда…
         </section>
       ) : null}
 
       {postQuery.isError ? (
-        <section className="rounded-3xl border border-rose-400/30 bg-rose-400/10 p-6 text-rose-100">
-          Failed to load the post. Check the filename or backend state.
+        <section className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-rose-900 shadow-sm">
+          Не удалось загрузить пост. Проверьте имя файла и состояние бэкенда.
         </section>
       ) : null}
 
@@ -963,24 +977,24 @@ export function PostEditorPage() {
           className={[
             "rounded-full border px-4 py-2 text-sm font-medium transition",
             panel === "editor"
-              ? "border-teal-400/70 bg-teal-400/15 text-teal-100"
-              : "border-white/10 bg-white/5 text-slate-300",
+              ? "border-teal-300 bg-teal-50 text-teal-900"
+              : "border-slate-200 bg-white text-slate-600",
           ].join(" ")}
           onClick={() => setPanel("editor")}
         >
-          Editor
+          Редактор
         </button>
         <button
           type="button"
           className={[
             "rounded-full border px-4 py-2 text-sm font-medium transition",
             panel === "preview"
-              ? "border-teal-400/70 bg-teal-400/15 text-teal-100"
-              : "border-white/10 bg-white/5 text-slate-300",
+              ? "border-teal-300 bg-teal-50 text-teal-900"
+              : "border-slate-200 bg-white text-slate-600",
           ].join(" ")}
           onClick={() => setPanel("preview")}
         >
-          Preview
+          Превью
         </button>
       </div>
 
@@ -1000,36 +1014,36 @@ export function PostEditorPage() {
               publishAttempts={publishAttempts}
             />
 
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
-              <div className="border-b border-white/10 pb-4">
-                <h3 className="text-xl font-semibold text-white">Metadata</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  Schedule, platform, content taxonomy and channel identity.
+            <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+              <div className="border-b border-slate-200 pb-4">
+                <h3 className="text-xl font-semibold text-slate-950">Метаданные</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Дата, платформа, тип материала и канал публикации.
                 </p>
               </div>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <FieldShell label="Date">
+                <FieldShell label="Дата">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="date"
                     value={formValues.date}
                     onChange={(event) => setFieldValue("date", event.target.value)}
                   />
                 </FieldShell>
 
-                <FieldShell label="Time">
+                <FieldShell label="Время">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="time"
                     value={formValues.time}
                     onChange={(event) => setFieldValue("time", event.target.value)}
                   />
                 </FieldShell>
 
-                <FieldShell label="Platform">
+                <FieldShell label="Платформа">
                   <select
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     value={formValues.platform}
                     onChange={(event) =>
                       handlePlatformChange(event.target.value as Platform)
@@ -1041,11 +1055,11 @@ export function PostEditorPage() {
                 </FieldShell>
 
                 <FieldShell
-                  label="Username"
-                  hint="Autofilled from platform unless you override it."
+                  label="Юзернейм"
+                  hint="Подставляется из платформы, пока вы не зададите свое значение."
                 >
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="text"
                     value={formValues.username}
                     placeholder="@biovoltru"
@@ -1055,21 +1069,21 @@ export function PostEditorPage() {
                   />
                 </FieldShell>
 
-                <FieldShell label="Post type">
+                <FieldShell label="Тип поста">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="text"
                     value={formValues.post_type}
-                    placeholder="educational"
+                    placeholder="образовательный"
                     onChange={(event) =>
                       setFieldValue("post_type", event.target.value)
                     }
                   />
                 </FieldShell>
 
-                <FieldShell label="Rubric">
+                <FieldShell label="Рубрика">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="text"
                     value={formValues.rubric}
                     placeholder="Разряд знаний"
@@ -1079,12 +1093,12 @@ export function PostEditorPage() {
                   />
                 </FieldShell>
 
-                <FieldShell label="Hook type" className="md:col-span-2">
+                <FieldShell label="Тип хука" className="md:col-span-2">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="text"
                     value={formValues.hook_type}
-                    placeholder="provocation"
+                    placeholder="провокация"
                     onChange={(event) =>
                       setFieldValue("hook_type", event.target.value)
                     }
@@ -1093,45 +1107,45 @@ export function PostEditorPage() {
               </div>
             </section>
 
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
-              <div className="border-b border-white/10 pb-4">
-                <h3 className="text-xl font-semibold text-white">Content</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  Title, markdown body and hashtag composition for the post.
+            <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+              <div className="border-b border-slate-200 pb-4">
+                <h3 className="text-xl font-semibold text-slate-950">Контент</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Заголовок, markdown-текст и набор хэштегов для поста.
                 </p>
               </div>
 
               <div className="mt-5 space-y-4">
-                <FieldShell label="Title">
+                <FieldShell label="Заголовок">
                   <input
-                    className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                     type="text"
                     value={formValues.title}
-                    placeholder="Post title"
+                    placeholder="Заголовок поста"
                     onChange={(event) =>
                       setFieldValue("title", event.target.value)
                     }
                   />
                 </FieldShell>
 
-                <FieldShell label="Body">
+                <FieldShell label="Текст">
                   <textarea
-                    className="min-h-[280px] rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
+                    className="min-h-[280px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
                     value={formValues.body}
-                    placeholder="Markdown body"
+                    placeholder="Markdown-текст"
                     onChange={(event) => setFieldValue("body", event.target.value)}
                   />
                 </FieldShell>
 
-                <FieldShell label="Hashtags" hint="Press Enter or comma to add.">
-                  <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                <FieldShell label="Хэштеги" hint="Нажмите Enter или запятую, чтобы добавить тег.">
+                  <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
                     <div className="flex flex-wrap gap-2">
                       {formValues.hashtags.length > 0 ? (
                         formValues.hashtags.map((tag) => (
                           <button
                             key={tag}
                             type="button"
-                            className="rounded-full border border-teal-400/25 bg-teal-400/10 px-3 py-1 text-xs font-medium text-teal-100 transition hover:border-rose-300/40 hover:bg-rose-400/10 hover:text-rose-100"
+                            className="rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-medium text-teal-900 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-900"
                             onClick={() => removeHashtag(tag)}
                           >
                             #{tag} ×
@@ -1139,14 +1153,14 @@ export function PostEditorPage() {
                         ))
                       ) : (
                         <span className="text-sm text-slate-500">
-                          No hashtags yet.
+                          Хэштегов пока нет.
                         </span>
                       )}
                     </div>
 
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <input
-                        className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
+                        className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
                         type="text"
                         value={hashtagInput}
                         placeholder="BioVolt"
@@ -1161,10 +1175,10 @@ export function PostEditorPage() {
                       />
                       <button
                         type="button"
-                        className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                        className="rounded-full border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
                         onClick={addHashtag}
                       >
-                        Add hashtag
+                        Добавить хэштег
                       </button>
                     </div>
                   </div>
@@ -1172,29 +1186,29 @@ export function PostEditorPage() {
               </div>
             </section>
 
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
-              <div className="flex flex-col gap-4 border-b border-white/10 pb-4 md:flex-row md:items-center md:justify-between">
+            <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+              <div className="flex flex-col gap-4 border-b border-slate-200 pb-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h3 className="text-xl font-semibold text-white">Poll</h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    Optional question with 2-10 inline-editable options.
+                  <h3 className="text-xl font-semibold text-slate-950">Опрос</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Необязательный вопрос с 2-10 вариантами ответа.
                   </p>
                 </div>
 
                 <button
                   type="button"
-                  className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                  className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
                   onClick={togglePoll}
                 >
-                  {formValues.pollEnabled ? "Remove poll" : "Add poll"}
+                  {formValues.pollEnabled ? "Убрать опрос" : "Добавить опрос"}
                 </button>
               </div>
 
               {formValues.pollEnabled ? (
                 <div className="mt-5 space-y-4">
-                  <FieldShell label="Poll question">
+                  <FieldShell label="Вопрос опроса">
                     <input
-                      className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                       type="text"
                       value={formValues.pollQuestion}
                       placeholder="Ваш вопрос"
@@ -1211,21 +1225,21 @@ export function PostEditorPage() {
                         className="flex flex-col gap-3 sm:flex-row"
                       >
                         <input
-                          className="min-w-0 flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60"
+                          className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500"
                           type="text"
                           value={option}
-                          placeholder={`Option ${index + 1}`}
+                          placeholder={`Вариант ${index + 1}`}
                           onChange={(event) =>
                             updatePollOption(index, event.target.value)
                           }
                         />
                         <button
                           type="button"
-                          className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-500"
+                          className="rounded-full border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:text-slate-400"
                           disabled={formValues.pollOptions.length <= 2}
                           onClick={() => removePollOption(index)}
                         >
-                          Remove
+                          Удалить
                         </button>
                       </div>
                     ))}
@@ -1233,62 +1247,62 @@ export function PostEditorPage() {
 
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-slate-400">
-                      {pollOptionCount} filled options
+                      {pollOptionCount} заполненных вариантов
                     </p>
                     <button
                       type="button"
-                      className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-500"
+                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:text-slate-400"
                       disabled={formValues.pollOptions.length >= 10}
                       onClick={addPollOption}
                     >
-                      Add option
+                      Добавить вариант
                     </button>
                   </div>
                 </div>
               ) : (
                 <p className="mt-5 text-sm text-slate-500">
-                  Poll is disabled for this draft.
+                  Для этого черновика опрос отключен.
                 </p>
               )}
             </section>
 
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
-              <div className="flex flex-col gap-4 border-b border-white/10 pb-4 md:flex-row md:items-center md:justify-between">
+            <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+              <div className="flex flex-col gap-4 border-b border-slate-200 pb-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h3 className="text-xl font-semibold text-white">
-                    Image prompt
+                  <h3 className="text-xl font-semibold text-slate-950">
+                    Промпт изображения
                   </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    Prompt, upload, generation and delete are wired to the
-                    backend media API for this draft.
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Промпт, загрузка, генерация и удаление связаны с media API
+                    бэкенда для этого черновика.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <PresenceBadge
-                    label={formValues.hasImage ? "Attached" : "No image"}
+                    label={formValues.hasImage ? "Прикреплено" : "Без изображения"}
                     active={formValues.hasImage}
                   />
                   <button
                     type="button"
-                    className="rounded-full border border-white/10 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                    className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
                     onClick={() =>
                       setImagePromptExpanded((current) => !current)
                     }
                   >
-                    {imagePromptExpanded ? "Collapse prompt" : "Expand prompt"}
+                    {imagePromptExpanded ? "Свернуть блок" : "Развернуть блок"}
                   </button>
                 </div>
               </div>
 
               {imagePromptExpanded ? (
                 <div className="mt-5 space-y-5">
-                  <FieldShell label="Prompt">
+                  <FieldShell label="Промпт">
                     <textarea
                       data-image-prompt-input="true"
-                      className="min-h-[180px] rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-teal-400/60"
+                      className="min-h-[180px] rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
                       value={formValues.imagePrompt}
-                      placeholder="Describe the desired image"
+                      placeholder="Опишите желаемое изображение"
                       onChange={(event) =>
                         setFieldValue("imagePrompt", event.target.value)
                       }
@@ -1310,19 +1324,19 @@ export function PostEditorPage() {
                         <button
                           type="button"
                           data-media-upload-button="true"
-                          className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:text-slate-500"
+                          className="rounded-full border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:text-slate-400"
                           disabled={!canManageImage || isImageMutationPending}
                           onClick={handleImagePickerOpen}
                         >
                           {uploadImageMutation.isPending
-                            ? "Uploading..."
-                            : "Upload file"}
+                            ? "Загружаем…"
+                            : "Загрузить файл"}
                         </button>
 
                         <button
                           type="button"
                           data-media-generate-button="true"
-                          className="rounded-full bg-teal-400 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                          className="rounded-full bg-teal-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                           disabled={
                             !canManageImage ||
                             isImageMutationPending ||
@@ -1334,16 +1348,16 @@ export function PostEditorPage() {
                           }}
                         >
                           {generateImageMutation.isPending
-                            ? "Generating..."
+                            ? "Генерируем…"
                             : formValues.hasImage
-                              ? "Regenerate image"
-                              : "Generate image"}
+                              ? "Перегенерировать изображение"
+                              : "Сгенерировать изображение"}
                         </button>
 
                         <button
                           type="button"
                           data-media-delete-button="true"
-                          className="rounded-full border border-rose-300/20 px-4 py-3 text-sm font-medium text-rose-100 transition hover:border-rose-300/40 hover:bg-rose-400/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-500"
+                          className="rounded-full border border-rose-200 px-4 py-3 text-sm font-medium text-rose-700 transition hover:border-rose-300 hover:bg-rose-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-400"
                           disabled={
                             !canManageImage ||
                             isImageMutationPending ||
@@ -1354,17 +1368,17 @@ export function PostEditorPage() {
                           }}
                         >
                           {deleteImageMutation.isPending
-                            ? "Deleting..."
-                            : "Delete image"}
+                            ? "Удаляем…"
+                            : "Удалить изображение"}
                         </button>
 
                         {formValues.imagePrompt ? (
                           <button
                             type="button"
-                            className="rounded-full border border-white/10 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                            className="rounded-full border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-white"
                             onClick={() => setFieldValue("imagePrompt", "")}
                           >
-                            Clear prompt
+                            Очистить промпт
                           </button>
                         ) : null}
                       </div>
@@ -1375,8 +1389,8 @@ export function PostEditorPage() {
                         className={[
                           "rounded-[28px] border border-dashed p-5 transition",
                           isImageDragActive
-                            ? "border-teal-300/70 bg-teal-400/10"
-                            : "border-white/10 bg-slate-950/40",
+                            ? "border-teal-300 bg-teal-50"
+                            : "border-slate-200 bg-slate-50/80",
                         ].join(" ")}
                         onDragEnter={handleImageDragEnter}
                         onDragOver={handleImageDragOver}
@@ -1385,35 +1399,35 @@ export function PostEditorPage() {
                           void handleImageDrop(event);
                         }}
                       >
-                        <p className="text-sm font-medium text-slate-100">
-                          Drag PNG, JPG or WEBP here
+                        <p className="text-sm font-medium text-slate-900">
+                          Перетащите сюда PNG, JPG или WEBP
                         </p>
-                        <p className="mt-2 text-sm leading-6 text-slate-400">
+                        <p className="mt-2 text-sm leading-6 text-slate-500">
                           {canManageImage
-                            ? "The upload is converted to PNG and saved under the draft filename."
-                            : "Save the draft first so the backend has a stable filename for the image."}
+                            ? "Файл будет конвертирован в PNG и сохранен под именем черновика."
+                            : "Сначала сохраните черновик, чтобы бэкенд получил стабильное имя файла."}
                         </p>
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-[1fr_0.9fr]">
                         <FieldShell
-                          label="Model"
+                          label="Модель"
                           hint={
                             mediaModels.length > 0
-                              ? `${mediaModels.length} models available from the upstream API.`
-                              : "Auto uses the backend default model."
+                              ? `${mediaModels.length} моделей доступно из внешнего API.`
+                              : "Автовыбор использует модель бэкенда по умолчанию."
                           }
                         >
                           <select
                             data-media-model="true"
-                            className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white outline-none transition focus:border-teal-400/60 disabled:cursor-not-allowed disabled:text-slate-500"
+                            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-teal-500 disabled:cursor-not-allowed disabled:text-slate-400"
                             value={selectedImageModel}
                             disabled={isImageMutationPending}
                             onChange={(event) =>
                               setSelectedImageModel(event.target.value)
                             }
                           >
-                            <option value="">Auto (backend default)</option>
+                            <option value="">Авто (модель бэкенда)</option>
                             {mediaModels.map((model) => (
                               <option key={model.id} value={model.id}>
                                 {model.id}
@@ -1423,21 +1437,21 @@ export function PostEditorPage() {
                           </select>
                         </FieldShell>
 
-                        <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-                          <p className="text-sm font-medium text-slate-200">
-                            Media status
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                          <p className="text-sm font-medium text-slate-700">
+                            Статус медиа
                           </p>
-                          <p className="mt-2 text-sm leading-6 text-slate-400">
+                          <p className="mt-2 text-sm leading-6 text-slate-500">
                             {formValues.hasImage
-                              ? `Attached asset: ${generatedImageName}`
-                              : "No image file attached yet."}
+                              ? `Прикрепленный файл: ${generatedImageName}`
+                              : "Изображение пока не прикреплено."}
                           </p>
                           <p className="mt-2 text-xs uppercase tracking-[0.16em] text-slate-500">
                             {mediaModelsQuery.isLoading
-                              ? "Loading models"
+                              ? "Загружаем модели"
                               : selectedImageModel
-                                ? `Selected model: ${selectedImageModel}`
-                                : "Selected model: backend default"}
+                                ? `Выбрана модель: ${selectedImageModel}`
+                                : "Выбрана модель бэкенда по умолчанию"}
                           </p>
                         </div>
                       </div>
@@ -1445,49 +1459,49 @@ export function PostEditorPage() {
                       {mediaError ? (
                         <div
                           data-media-error="true"
-                          className="rounded-2xl border border-rose-400/30 bg-rose-400/10 px-4 py-3 text-sm text-rose-100"
+                          className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900"
                         >
                           {mediaError}
                         </div>
                       ) : null}
 
                       {mediaModelsError ? (
-                        <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                          {mediaModelsError} Configure Image API settings if
-                          generation is unavailable.
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          {mediaModelsError} Проверьте настройки Image API, если
+                          генерация недоступна.
                         </div>
                       ) : null}
                     </div>
 
-                    <div className="rounded-[28px] border border-white/10 bg-slate-950/40 p-4">
+                    <div className="rounded-[28px] border border-slate-200 bg-slate-50/80 p-4">
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
-                            Thumbnail
+                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-600">
+                            Миниатюра
                           </p>
-                          <p className="mt-2 text-sm text-slate-400">
+                          <p className="mt-2 text-sm text-slate-500">
                             {generatedImageName}
                           </p>
                         </div>
                         <PresenceBadge
-                          label={formValues.hasImage ? "Ready" : "Empty"}
+                          label={formValues.hasImage ? "Готово" : "Пусто"}
                           active={formValues.hasImage}
                         />
                       </div>
 
-                      <div className="mt-4 overflow-hidden rounded-[24px] border border-white/10 bg-gradient-to-br from-white/5 to-transparent">
+                      <div className="mt-4 overflow-hidden rounded-[24px] border border-slate-200 bg-white">
                         {imagePreviewUrl ? (
                           <img
                             data-media-image-preview="true"
                             className="h-[320px] w-full object-cover"
                             src={imagePreviewUrl}
-                            alt={`Preview for ${generatedImageName}`}
+                            alt={`Предпросмотр изображения ${generatedImageName}`}
                           />
                         ) : (
                           <div className="flex h-[320px] items-center justify-center px-6 text-center text-sm leading-6 text-slate-500">
                             {formValues.imagePrompt.trim()
-                              ? "Prompt is ready. Generate or upload an image to see the thumbnail."
-                              : "No image yet. Add a prompt or drop a file here."}
+                              ? "Промпт готов. Сгенерируйте или загрузите изображение, чтобы увидеть миниатюру."
+                              : "Изображения пока нет. Добавьте промпт или перетащите файл сюда."}
                           </div>
                         )}
                       </div>
@@ -1497,34 +1511,34 @@ export function PostEditorPage() {
               ) : (
                 <p className="mt-5 text-sm text-slate-500">
                   {formValues.hasImage
-                    ? "Image is attached, but the management panel is collapsed."
+                    ? "Изображение прикреплено, но панель управления свернута."
                     : formValues.imagePrompt
-                      ? "Prompt is stored, but the management panel is collapsed."
-                      : "Prompt section is collapsed until you expand it."}
+                      ? "Промпт сохранен, но панель управления свернута."
+                      : "Раздел с промптом свернут, пока вы его не раскроете."}
                 </p>
               )}
             </section>
 
-            <section className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-slate-950/50 p-5 md:flex-row md:items-center md:justify-between">
+            <section className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50/90 p-5 shadow-sm md:flex-row md:items-center md:justify-between">
               <div className="space-y-1 text-sm">
-                <p className="text-slate-200">
+                <p className="text-slate-700">
                   {isDirty
-                    ? "Unsaved changes detected."
-                    : "All changes are saved."}
+                    ? "Есть несохраненные изменения."
+                    : "Все изменения сохранены."}
                 </p>
                 <p className="text-slate-500">
                   {formValues.rawMarkdown
-                    ? "Raw markdown is loaded from backend."
-                    : "Markdown file will be created after the first save."}
+                    ? "Исходный markdown загружен из бэкенда."
+                    : "Markdown-файл будет создан после первого сохранения."}
                 </p>
               </div>
 
               <button
                 type="submit"
-                className="inline-flex items-center justify-center rounded-full bg-teal-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                className="inline-flex items-center justify-center rounded-full bg-teal-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
                 disabled={saveMutation.isPending || postQuery.isLoading}
               >
-                {saveMutation.isPending ? "Saving..." : "Save post"}
+                {saveMutation.isPending ? "Сохраняем…" : "Сохранить пост"}
               </button>
             </section>
           </form>
@@ -1532,16 +1546,16 @@ export function PostEditorPage() {
 
         <div className={panel === "editor" ? "hidden xl:block" : ""}>
           <section
-            className="space-y-5 rounded-3xl border border-white/10 bg-white/5 p-6"
+            className="space-y-5 rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm"
             data-preview-platform={previewPlatform}
           >
-            <div className="flex flex-col gap-4 border-b border-white/10 pb-4">
+            <div className="flex flex-col gap-4 border-b border-slate-200 pb-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h3 className="text-xl font-semibold text-white">Preview</h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">
-                    Live render updates after {PREVIEW_DEBOUNCE_MS}ms debounce
-                    and reflects the selected target platform.
+                  <h3 className="text-xl font-semibold text-slate-950">Превью</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Превью обновляется после debounce {PREVIEW_DEBOUNCE_MS} мс и
+                    показывает рендер для выбранной платформы.
                   </p>
                 </div>
 
@@ -1553,8 +1567,8 @@ export function PostEditorPage() {
                       className={[
                         "rounded-full border px-4 py-2 text-sm font-medium transition",
                         previewPlatform === item
-                          ? "border-teal-400/70 bg-teal-400/15 text-teal-100"
-                          : "border-white/10 bg-white/5 text-slate-300",
+                          ? "border-teal-300 bg-teal-50 text-teal-900"
+                          : "border-slate-200 bg-white text-slate-600",
                       ].join(" ")}
                       onClick={() => setPreviewPlatform(item)}
                     >
@@ -1572,29 +1586,29 @@ export function PostEditorPage() {
                   ].join(" ")}
                   data-char-count={previewCharCount}
                 >
-                  {previewCharCount} chars
+                  {previewCharCount} символов
                 </span>
                 <PresenceBadge
-                  label={previewQuery.isFetching ? "Updating" : "Live"}
+                  label={previewQuery.isFetching ? "Обновляем" : "Актуально"}
                   active={!previewQuery.isFetching}
                 />
                 <PresenceBadge
-                  label={`Issues ${previewIssues.length}`}
+                  label={`Замечаний: ${previewIssues.length}`}
                   active={previewIssues.length > 0}
                 />
               </div>
             </div>
 
             {previewQuery.isLoading ? (
-              <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 text-sm text-slate-300">
-                Building preview from draft payload...
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5 text-sm text-slate-600">
+                Собираем превью из текущего черновика…
               </div>
             ) : null}
 
             {previewQuery.isError ? (
-              <div className="rounded-2xl border border-rose-400/30 bg-rose-400/10 p-5 text-sm text-rose-100">
-                Preview request failed. Keep editing and retry after the next
-                valid payload.
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-5 text-sm text-rose-900">
+                Запрос на превью завершился ошибкой. Продолжайте редактирование и
+                повторите после следующего валидного запроса.
               </div>
             ) : null}
 
@@ -1602,17 +1616,17 @@ export function PostEditorPage() {
               <div className="space-y-5">
                 <div
                   className={[
-                    "rounded-[28px] border p-5 shadow-xl",
+                    "rounded-[28px] border p-5 shadow-sm",
                     previewPlatform === "telegram"
-                      ? "border-cyan-400/20 bg-gradient-to-br from-cyan-400/12 to-slate-950/80"
-                      : "border-indigo-400/20 bg-gradient-to-br from-indigo-400/12 to-slate-950/80",
+                      ? "border-cyan-200 bg-gradient-to-br from-cyan-50 to-white"
+                      : "border-indigo-200 bg-gradient-to-br from-indigo-50 to-white",
                   ].join(" ")}
                 >
-                  <div className="mb-4 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-slate-400">
+                  <div className="mb-4 flex items-center justify-between text-xs uppercase tracking-[0.18em] text-slate-500">
                     <span>
                       {previewPlatform === "telegram"
-                        ? "Telegram render"
-                        : "VK render"}
+                        ? "Рендер Telegram"
+                        : "Рендер VK"}
                     </span>
                     <span>{previewQuery.data.platform ?? previewPlatform}</span>
                   </div>
@@ -1620,7 +1634,7 @@ export function PostEditorPage() {
                   {previewPlatform === "telegram" ? (
                     <div
                       data-preview-body="telegram"
-                      className="space-y-3 rounded-[24px] bg-slate-950/70 p-5 text-sm leading-7 text-slate-100"
+                      className="space-y-3 rounded-[24px] bg-white p-5 text-sm leading-7 text-slate-900 shadow-inner"
                       dangerouslySetInnerHTML={{
                         __html: previewQuery.data.rendered_text.replace(
                           /\n/g,
@@ -1631,7 +1645,7 @@ export function PostEditorPage() {
                   ) : (
                     <pre
                       data-preview-body="vk"
-                      className="whitespace-pre-wrap rounded-[24px] bg-slate-950/70 p-5 text-sm leading-7 text-slate-100"
+                      className="whitespace-pre-wrap rounded-[24px] bg-white p-5 text-sm leading-7 text-slate-900 shadow-inner"
                     >
                       {previewQuery.data.rendered_text}
                     </pre>
@@ -1639,21 +1653,21 @@ export function PostEditorPage() {
                 </div>
 
                 {previewQuery.data.poll ? (
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
-                        Poll preview
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-600">
+                        Превью опроса
                       </h4>
-                      <PresenceBadge label="Poll" />
+                      <PresenceBadge label="Опрос" />
                     </div>
-                    <p className="mt-4 text-base font-semibold text-white">
+                    <p className="mt-4 text-base font-semibold text-slate-950">
                       {previewQuery.data.poll.question}
                     </p>
                     <div className="mt-4 grid gap-2">
                       {previewQuery.data.poll.options.map((option) => (
                         <div
                           key={option}
-                          className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200"
+                          className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700"
                         >
                           {option}
                         </div>
@@ -1663,42 +1677,42 @@ export function PostEditorPage() {
                 ) : null}
 
                 {formValues.hasImage || formValues.imagePrompt.trim() ? (
-                  <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
-                        Image preview
+                      <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-600">
+                        Превью изображения
                       </h4>
                       <PresenceBadge
-                        label={formValues.hasImage ? "Attached" : "Prompt ready"}
+                        label={formValues.hasImage ? "Прикреплено" : "Промпт готов"}
                       />
                     </div>
-                    <div className="mt-4 overflow-hidden rounded-[24px] border border-dashed border-white/10 bg-gradient-to-br from-white/5 to-transparent">
+                    <div className="mt-4 overflow-hidden rounded-[24px] border border-dashed border-slate-200 bg-white">
                       {imagePreviewUrl ? (
                         <img
                           className="h-[260px] w-full object-cover"
                           src={imagePreviewUrl}
-                          alt={`Preview for ${generatedImageName}`}
+                          alt={`Предпросмотр изображения ${generatedImageName}`}
                         />
                       ) : (
                         <div className="p-8 text-center text-sm text-slate-400">
-                          Image prompt is ready; upload or generate to attach
-                          the final asset.
+                          Промпт готов. Загрузите или сгенерируйте изображение,
+                          чтобы прикрепить финальный файл.
                         </div>
                       )}
                     </div>
                   </div>
                 ) : null}
 
-                <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-300">
-                      Validation
+                    <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-600">
+                      Валидация
                     </h4>
                     <span
-                      className="text-sm text-slate-400"
+                      className="text-sm text-slate-500"
                       data-validation-count={previewIssues.length}
                     >
-                      {previewIssues.length} issues
+                      {previewIssues.length} замечаний
                     </span>
                   </div>
 
@@ -1714,19 +1728,21 @@ export function PostEditorPage() {
                         >
                           <div className="flex items-center justify-between gap-3">
                             <span className="font-semibold uppercase tracking-[0.14em]">
-                              {issue.level}
+                              {validationLevelLabel(issue.level)}
                             </span>
                             <span className="text-xs uppercase tracking-[0.14em] opacity-70">
                               {issue.code}
                             </span>
                           </div>
-                          <p className="mt-2 leading-6">{issue.message}</p>
+                          <p className="mt-2 leading-6">
+                            {formatValidationIssueMessage(issue)}
+                          </p>
                         </div>
                       ))}
                     </div>
                   ) : (
                     <p className="mt-4 text-sm text-slate-400">
-                      No validation issues for the current preview payload.
+                      Для текущего запроса превью замечаний нет.
                     </p>
                   )}
                 </div>
