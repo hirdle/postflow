@@ -7,23 +7,23 @@ import { SchedulesPage } from "./pages/SchedulesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 
 const navigation = [
-  { to: "/", label: "Posts", end: true },
-  { to: "/schedules", label: "Schedules" },
-  { to: "/settings", label: "Settings" },
+  { to: "/", label: "Посты", end: true },
+  { to: "/schedules", label: "Расписание" },
+  { to: "/settings", label: "Настройки" },
 ];
 
 function App() {
   return (
     <ToastProvider>
-      <div className="min-h-screen px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
-        <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-7xl flex-col rounded-[28px] border border-white/10 bg-slate-950/70 shadow-glow backdrop-blur">
-          <header className="border-b border-white/10 px-6 py-5">
+      <div className="min-h-screen px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-7xl flex-col rounded-[28px] border border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
+          <header className="border-b border-slate-200/80 px-6 py-5">
             <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
               <div>
-                <p className="text-sm uppercase tracking-[0.28em] text-teal-300/70">
-                  BioVolt Ops
+                <p className="text-sm uppercase tracking-[0.28em] text-teal-700/70">
+                  Рабочее место BioVolt
                 </p>
-                <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">
+                <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">
                   PostFlow
                 </h1>
               </div>
@@ -38,8 +38,8 @@ function App() {
                       [
                         "rounded-full border px-4 py-2 text-sm font-medium transition",
                         isActive
-                          ? "border-teal-400/70 bg-teal-400/15 text-teal-100"
-                          : "border-white/10 bg-white/5 text-slate-300 hover:border-white/20 hover:bg-white/10",
+                          ? "border-teal-300 bg-teal-50 text-teal-900 shadow-sm"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50",
                       ].join(" ")
                     }
                   >

@@ -1,8 +1,8 @@
 import type { Platform } from "../types";
 
 const PLATFORM_STYLES: Record<Platform, string> = {
-  telegram: "border-cyan-400/30 bg-cyan-400/10 text-cyan-100",
-  vk: "border-indigo-400/30 bg-indigo-400/10 text-indigo-100",
+  telegram: "border-cyan-200 bg-cyan-50 text-cyan-900",
+  vk: "border-indigo-200 bg-indigo-50 text-indigo-900",
 };
 
 interface PlatformBadgeProps {

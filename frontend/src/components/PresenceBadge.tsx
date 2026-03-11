@@ -12,8 +12,8 @@ export function PresenceBadge({
       className={[
         "inline-flex rounded-full border px-3 py-1 text-xs font-medium",
         active
-          ? "border-white/15 bg-white/10 text-slate-100"
-          : "border-white/10 bg-slate-900/60 text-slate-400",
+          ? "border-slate-200 bg-white text-slate-700"
+          : "border-slate-200 bg-slate-100 text-slate-500",
       ].join(" ")}
     >
       {label}

@@ -15,12 +15,12 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 
 function toastClasses(tone: ToastTone) {
   if (tone === "success") {
-    return "border-teal-400/30 bg-teal-400/10 text-teal-100";
+    return "border-teal-200 bg-teal-50 text-teal-900";
   }
   if (tone === "warning") {
-    return "border-amber-400/30 bg-amber-400/10 text-amber-100";
+    return "border-amber-200 bg-amber-50 text-amber-900";
   }
-  return "border-rose-400/30 bg-rose-400/10 text-rose-100";
+  return "border-rose-200 bg-rose-50 text-rose-900";
 }
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -48,7 +48,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         {toast ? (
           <div
             className={[
-              "rounded-2xl border px-4 py-3 text-sm shadow-2xl backdrop-blur",
+              "rounded-2xl border px-4 py-3 text-sm shadow-lg backdrop-blur",
               toastClasses(toast.tone),
             ].join(" ")}
           >

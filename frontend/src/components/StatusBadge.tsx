@@ -1,11 +1,19 @@
 import type { PublishStatus } from "../types";
 
 const STATUS_STYLES: Record<PublishStatus, string> = {
-  draft: "border-slate-400/20 bg-slate-400/10 text-slate-200",
-  scheduled: "border-sky-400/30 bg-sky-400/10 text-sky-100",
-  published: "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
-  failed: "border-rose-400/30 bg-rose-400/10 text-rose-100",
-  cancelled: "border-amber-400/30 bg-amber-400/10 text-amber-100",
+  draft: "border-slate-200 bg-slate-100 text-slate-700",
+  scheduled: "border-sky-200 bg-sky-50 text-sky-900",
+  published: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  failed: "border-rose-200 bg-rose-50 text-rose-900",
+  cancelled: "border-amber-200 bg-amber-50 text-amber-900",
+};
+
+const STATUS_LABELS: Record<PublishStatus, string> = {
+  draft: "Черновик",
+  scheduled: "Запланирован",
+  published: "Опубликован",
+  failed: "Ошибка",
+  cancelled: "Отменен",
 };
 
 interface StatusBadgeProps {
@@ -20,7 +28,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
         STATUS_STYLES[status],
       ].join(" ")}
     >
-      {status}
+      {STATUS_LABELS[status]}
     </span>
   );
 }
