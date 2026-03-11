@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { PlatformBadge } from "./PlatformBadge";
 import { PresenceBadge } from "./PresenceBadge";
@@ -106,6 +107,7 @@ export function PublishDialog({
 }: PublishDialogProps) {
   const [mode, setMode] = useState<PublishMode>("now");
   const [step, setStep] = useState<PublishDialogStep>("review");
+  const portalRoot = typeof document === "undefined" ? null : document.body;
 
   useEffect(() => {
     if (!open) {
@@ -137,7 +139,21 @@ export function PublishDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [open, onClose, submitPending]);
 
-  if (!open) {
+  useEffect(() => {
+    if (!open || !portalRoot) {
+      return;
+    }
+
+    const previousOverflow = portalRoot.style.overflow;
+
+    portalRoot.style.overflow = "hidden";
+
+    return () => {
+      portalRoot.style.overflow = previousOverflow;
+    };
+  }, [open, portalRoot]);
+
+  if (!open || !portalRoot) {
     return null;
   }
 
@@ -185,12 +201,14 @@ export function PublishDialog({
         )}.`
       : `Пост будет сразу отправлен в ${platformLabel(platform)}.`;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 px-4 py-6 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 px-4 py-6 backdrop-blur-sm"
       data-publish-dialog="true"
       data-publish-mode={mode}
       data-publish-step={step}
+      role="dialog"
+      aria-modal="true"
     >
       <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[32px] border border-slate-200 bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.14)]">
         <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 md:flex-row md:items-start md:justify-between">
@@ -522,6 +540,7 @@ export function PublishDialog({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    portalRoot,
   );
 }

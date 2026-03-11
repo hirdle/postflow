@@ -1,4 +1,5 @@
-import { NavLink, Route, Routes } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { ToastProvider } from "./components/ToastProvider";
 import { PostEditorPage } from "./pages/PostEditorPage";
@@ -12,9 +13,20 @@ const navigation = [
   { to: "/settings", label: "Настройки" },
 ];
 
+function ScrollToTop() {
+  const location = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [location.pathname, location.search]);
+
+  return null;
+}
+
 function App() {
   return (
     <ToastProvider>
+      <ScrollToTop />
       <div className="min-h-screen px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
         <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-7xl flex-col rounded-[28px] border border-white/70 bg-white/80 shadow-[0_24px_80px_rgba(15,23,42,0.08)] backdrop-blur">
           <header className="border-b border-slate-200/80 px-6 py-5">
