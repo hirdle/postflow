@@ -72,7 +72,6 @@ postflow/
 │   ├── images/        # Generated/uploaded images
 │   ├── brand-knowledge/  # Brand guidelines (Obsidian vault, read-only)
 │   └── publish.db     # SQLite (statuses, attempts, settings)
-├── mcps/              # Legacy MCP code (migration source, will be deleted)
 ├── docker-compose.yml
 ├── CLAUDE.md
 └── PRD.md

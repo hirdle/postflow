@@ -1,5 +1,4 @@
 data/*
-mcps/
 __pycache__/
 *.pyc
 frontend/dist/
