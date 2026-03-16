@@ -6,6 +6,7 @@ import { PostEditorPage } from "./pages/PostEditorPage";
 import { PostListPage } from "./pages/PostListPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { VkAuthCallbackPage } from "./pages/VkAuthCallbackPage";
 
 const navigation = [
   { to: "/", label: "Посты", end: true },
@@ -69,6 +70,10 @@ function App() {
               <Route path="/posts/:filename" element={<PostEditorPage />} />
               <Route path="/schedules" element={<SchedulesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route
+                path="/settings/vk/callback"
+                element={<VkAuthCallbackPage />}
+              />
             </Routes>
           </main>
         </div>

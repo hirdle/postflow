@@ -22,12 +22,22 @@ from app.infra.telegram_qr_auth import (
     TelegramQrAuthSnapshot,
     get_telegram_qr_auth_manager,
 )
+from app.infra.vk_auth import (
+    VkAuthManager,
+    VkAuthSnapshot,
+    get_vk_auth_manager,
+)
 from app.infra.vk_client import (
     VK_API_BASE,
     VK_API_VERSION,
     VKClient,
+    VKCommunity,
     VKSettings,
+    VKUserProfile,
+    delete_vk_settings,
     load_vk_settings,
+    load_vk_settings_map,
+    upsert_vk_settings,
 )
 
 __all__ = [
@@ -43,13 +53,21 @@ __all__ = [
     "TelegramQrAuthManager",
     "TelegramQrAuthSnapshot",
     "TelegramSettings",
+    "VKCommunity",
     "VK_API_BASE",
     "VK_API_VERSION",
+    "VKUserProfile",
+    "VkAuthManager",
+    "VkAuthSnapshot",
     "VKClient",
     "VKSettings",
     "get_telegram_qr_auth_manager",
+    "get_vk_auth_manager",
+    "delete_vk_settings",
     "load_image_api_settings",
     "load_telegram_auth_settings",
     "load_telegram_settings",
     "load_vk_settings",
+    "load_vk_settings_map",
+    "upsert_vk_settings",
 ]

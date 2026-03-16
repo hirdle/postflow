@@ -4,9 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client";
 import { useToast } from "../components/ToastProvider";
 import type {
+  SettingsResponseData,
   SettingsFormValues,
   TelegramSessionState,
   TelegramSessionStatus,
+  VkAuthSessionState,
+  VkAuthSessionStatus,
+  VkCommunitiesResponse,
+  VkCommunityOption,
 } from "../types";
 
 const SECRET_FIELDS = new Set<keyof SettingsFormValues>([
@@ -21,6 +26,7 @@ const TELEGRAM_SETTINGS_FIELDS: Array<keyof SettingsFormValues> = [
   "telegram_session_path",
   "telegram_channel",
 ];
+const VK_SETTINGS_FIELDS: Array<keyof SettingsFormValues> = ["vk_client_id"];
 const ACTIVE_TELEGRAM_SESSION_STATUSES = new Set<TelegramSessionStatus>([
   "waiting_for_scan",
   "password_required",
@@ -32,14 +38,27 @@ const FINAL_TELEGRAM_SESSION_STATUSES = new Set<TelegramSessionStatus>([
   "cancelled",
 ]);
 const TELEGRAM_SESSION_STORAGE_KEY = "postflow:telegram-session-id";
+const ACTIVE_VK_SESSION_STATUSES = new Set<VkAuthSessionStatus>([
+  "waiting_for_callback",
+  "authorizing",
+]);
+const FINAL_VK_SESSION_STATUSES = new Set<VkAuthSessionStatus>([
+  "authorized",
+  "expired",
+  "failed",
+  "cancelled",
+]);
+const VK_SESSION_STORAGE_KEY = "postflow:vk-session-id";
 
 const EMPTY_FORM: SettingsFormValues = {
   telegram_api_id: "",
   telegram_api_hash: "",
   telegram_session_path: "",
   telegram_channel: "",
+  vk_client_id: "",
   vk_access_token: "",
   vk_group_id: "",
+  vk_group_name: "",
   image_api_key: "",
   image_base_url: "",
   image_default_model: "",
@@ -80,23 +99,6 @@ const SECTION_FIELDS: Array<{
         key: "telegram_channel",
         label: "Канал",
         placeholder: "@biovoltru_channel",
-      },
-    ],
-  },
-  {
-    title: "VK",
-    description: "Доступ к публикациям на стене и к настройкам группы.",
-    fields: [
-      {
-        key: "vk_access_token",
-        label: "Токен доступа",
-        placeholder: "vk1.a....",
-        secret: true,
-      },
-      {
-        key: "vk_group_id",
-        label: "ID группы",
-        placeholder: "123456",
       },
     ],
   },
@@ -184,6 +186,24 @@ function writeStoredTelegramSessionId(sessionId: string | null) {
   window.sessionStorage.removeItem(TELEGRAM_SESSION_STORAGE_KEY);
 }
 
+function readStoredVkSessionId() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.localStorage.getItem(VK_SESSION_STORAGE_KEY);
+}
+
+function writeStoredVkSessionId(sessionId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (sessionId) {
+    window.localStorage.setItem(VK_SESSION_STORAGE_KEY, sessionId);
+    return;
+  }
+  window.localStorage.removeItem(VK_SESSION_STORAGE_KEY);
+}
+
 function formatTelegramSessionStatus(status: TelegramSessionStatus | null | undefined) {
   switch (status) {
     case "waiting_for_scan":
@@ -238,6 +258,84 @@ function telegramSessionToneClasses(status: TelegramSessionStatus | null | undef
   return "border-cyan-200 bg-cyan-50 text-cyan-900";
 }
 
+function formatVkConnectionStatus(status: SettingsResponseData["vk_auth_status"] | null | undefined) {
+  switch (status) {
+    case "connected":
+      return "VK подключен";
+    case "expired":
+      return "VK токен истек";
+    default:
+      return "VK не подключен";
+  }
+}
+
+function describeVkConnection(settings: SettingsResponseData | undefined) {
+  if (!settings || settings.vk_auth_status === "not_connected") {
+    return "Укажите VK App ID и запустите подключение. После подтверждения входа backend сохранит пользовательский токен и загрузит доступные сообщества.";
+  }
+  if (settings.vk_auth_status === "expired") {
+    return "Сохраненный VK токен истек. Переподключите аккаунт, чтобы обновить токен и восстановить публикацию в сообщество.";
+  }
+  if (settings.vk_group_name) {
+    return `Аккаунт подключен. Текущее сообщество для публикации: ${settings.vk_group_name}.`;
+  }
+  return "Аккаунт подключен, но рабочее сообщество еще не выбрано.";
+}
+
+function formatVkSessionStatus(status: VkAuthSessionStatus | null | undefined) {
+  switch (status) {
+    case "waiting_for_callback":
+      return "Ждем возврата из VK";
+    case "authorizing":
+      return "Завершаем авторизацию";
+    case "authorized":
+      return "VK подключен";
+    case "expired":
+      return "VK flow истек";
+    case "failed":
+      return "VK flow завершился ошибкой";
+    case "cancelled":
+      return "VK flow отменен";
+    default:
+      return "VK flow не запущен";
+  }
+}
+
+function describeVkSession(session: VkAuthSessionState | null) {
+  if (!session) {
+    return "Нажмите кнопку подключения, откроется VK auth flow. После возврата callback-page передаст код на backend и запросит профиль пользователя.";
+  }
+  switch (session.status) {
+    case "waiting_for_callback":
+      return "Окно авторизации открыто. Подтвердите вход и вернитесь в PostFlow.";
+    case "authorizing":
+      return "Backend обменивает code на токены, проверяет scope и загружает список сообществ.";
+    case "authorized":
+      return "Подключение завершено. Можно выбрать сообщество для дальнейших публикаций.";
+    case "expired":
+      return "VK auth flow истек до завершения. Запустите подключение снова.";
+    case "failed":
+      return "Backend отклонил callback или не смог завершить обмен токена.";
+    case "cancelled":
+      return "Текущий VK flow остановлен.";
+    default:
+      return "";
+  }
+}
+
+function vkSessionToneClasses(status: VkAuthSessionStatus | null | undefined) {
+  if (status === "authorized") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  }
+  if (status === "authorizing") {
+    return "border-amber-200 bg-amber-50 text-amber-900";
+  }
+  if (status === "expired" || status === "failed" || status === "cancelled") {
+    return "border-rose-200 bg-rose-50 text-rose-900";
+  }
+  return "border-sky-200 bg-sky-50 text-sky-900";
+}
+
 function formatSessionTimestamp(value: string | null) {
   if (!value) {
     return null;
@@ -262,12 +360,14 @@ export function SettingsPage() {
   const [telegramSessionId, setTelegramSessionId] = useState<string | null>(() =>
     readStoredTelegramSessionId(),
   );
+  const [vkSessionId, setVkSessionId] = useState<string | null>(() => readStoredVkSessionId());
   const [telegramPassword, setTelegramPassword] = useState("");
+  const [showVkFallback, setShowVkFallback] = useState(false);
   const { pushToast } = useToast();
 
   const settingsQuery = useQuery({
     queryKey: ["settings"],
-    queryFn: () => apiFetch<SettingsFormValues>("/settings"),
+    queryFn: () => apiFetch<SettingsResponseData>("/settings"),
   });
 
   useEffect(() => {
@@ -280,17 +380,22 @@ export function SettingsPage() {
     setInitialValues(normalized);
   }, [settingsQuery.data]);
 
+  function syncSettingsState(data: SettingsResponseData) {
+    const normalized = normalizeSettings(data);
+    queryClient.setQueryData(["settings"], data);
+    setFormValues(normalized);
+    setInitialValues(normalized);
+  }
+
   const updateMutation = useMutation({
     mutationFn: async (payload: Partial<SettingsFormValues>) =>
-      apiFetch<SettingsFormValues>("/settings", {
+      apiFetch<SettingsResponseData>("/settings", {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
     onSuccess: (data) => {
-      const normalized = normalizeSettings(data);
-      queryClient.setQueryData(["settings"], normalized);
-      setFormValues(normalized);
-      setInitialValues(normalized);
+      syncSettingsState(data);
+      void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
       pushToast({
         tone: "success",
         message: "Настройки сохранены и перечитаны из бэкенда.",
@@ -301,6 +406,13 @@ export function SettingsPage() {
         error instanceof Error ? error.message : "Не удалось сохранить настройки.";
       pushToast({ tone: "error", message });
     },
+  });
+
+  const vkCommunitiesQuery = useQuery({
+    queryKey: ["vk-communities"],
+    enabled: settingsQuery.data?.vk_auth_status === "connected",
+    queryFn: () => apiFetch<VkCommunitiesResponse>("/settings/vk/communities"),
+    retry: false,
   });
 
   const telegramSessionQuery = useQuery({
@@ -318,9 +430,28 @@ export function SettingsPage() {
     },
   });
 
+  const vkSessionQuery = useQuery({
+    queryKey: ["vk-session", vkSessionId],
+    enabled: Boolean(vkSessionId),
+    queryFn: () => apiFetch<VkAuthSessionState>(`/settings/vk/session/${vkSessionId}`),
+    retry: false,
+    refetchInterval: (query) => {
+      const session = query.state.data as VkAuthSessionState | undefined;
+      if (!session) {
+        return 2500;
+      }
+      return ACTIVE_VK_SESSION_STATUSES.has(session.status) ? 2500 : false;
+    },
+  });
+
   function activateTelegramSession(session: TelegramSessionState) {
     setTelegramSessionId(session.session_id);
     queryClient.setQueryData(["telegram-session", session.session_id], session);
+  }
+
+  function activateVkSession(session: VkAuthSessionState) {
+    setVkSessionId(session.session_id);
+    queryClient.setQueryData(["vk-session", session.session_id], session);
   }
 
   async function persistTelegramSettingsIfNeeded() {
@@ -329,6 +460,16 @@ export function SettingsPage() {
       initialValues,
       TELEGRAM_SETTINGS_FIELDS,
     );
+
+    if (Object.keys(payload).length === 0) {
+      return;
+    }
+
+    await updateMutation.mutateAsync(payload);
+  }
+
+  async function persistVkSettingsIfNeeded() {
+    const payload = buildSettingsPayload(formValues, initialValues, VK_SETTINGS_FIELDS);
 
     if (Object.keys(payload).length === 0) {
       return;
@@ -421,6 +562,111 @@ export function SettingsPage() {
     },
   });
 
+  const startVkSessionMutation = useMutation({
+    mutationFn: async () => {
+      await persistVkSettingsIfNeeded();
+      return apiFetch<VkAuthSessionState>("/settings/vk/session", {
+        method: "POST",
+        body: JSON.stringify({
+          redirect_uri: `${window.location.origin}/settings/vk/callback`,
+        }),
+      });
+    },
+    onSuccess: (session) => {
+      activateVkSession(session);
+      if (session.authorize_url) {
+        const popup = window.open(
+          session.authorize_url,
+          "postflow-vk-auth",
+          "popup=yes,width=720,height=820,resizable=yes,scrollbars=yes",
+        );
+        if (popup) {
+          popup.focus();
+        } else {
+          window.location.assign(session.authorize_url);
+        }
+      }
+      pushToast({
+        tone: "success",
+        message: "VK auth flow запущен. Завершите вход в открывшемся окне.",
+      });
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error ? error.message : "Не удалось запустить VK-подключение.";
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const cancelVkSessionMutation = useMutation({
+    mutationFn: async () => {
+      if (!vkSessionId) {
+        throw new Error("Нет активной VK-сессии.");
+      }
+      return apiFetch<VkAuthSessionState>(`/settings/vk/session/${vkSessionId}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: (session) => {
+      activateVkSession(session);
+      pushToast({
+        tone: "warning",
+        message: "VK auth flow остановлен.",
+      });
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error ? error.message : "Не удалось остановить VK-сессию.";
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const disconnectVkMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<SettingsResponseData>("/settings/vk/connection", {
+        method: "DELETE",
+      }),
+    onSuccess: (data) => {
+      syncSettingsState(data);
+      setVkSessionId(null);
+      writeStoredVkSessionId(null);
+      void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
+      pushToast({
+        tone: "warning",
+        message: "VK-подключение очищено.",
+      });
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error ? error.message : "Не удалось отключить VK.";
+      pushToast({ tone: "error", message });
+    },
+  });
+
+  const saveVkCommunityMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<SettingsResponseData>("/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          vk_group_id: formValues.vk_group_id,
+          vk_group_name: formValues.vk_group_name,
+        }),
+      }),
+    onSuccess: (data) => {
+      syncSettingsState(data);
+      void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
+      pushToast({
+        tone: "success",
+        message: "Рабочее VK-сообщество сохранено.",
+      });
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error ? error.message : "Не удалось сохранить VK-сообщество.";
+      pushToast({ tone: "error", message });
+    },
+  });
+
   const isDirty = Object.keys(formValues).some((key) => {
     const typedKey = key as keyof SettingsFormValues;
     return formValues[typedKey] !== initialValues[typedKey];
@@ -431,16 +677,41 @@ export function SettingsPage() {
   const telegramSession = telegramSessionId
     ? (telegramSessionQuery.data ?? null)
     : null;
+  const vkSession = vkSessionId ? (vkSessionQuery.data ?? null) : null;
   const telegramQrExpiresAt = formatSessionTimestamp(
     telegramSession?.expires_at ?? null,
+  );
+  const vkFlowExpiresAt = formatSessionTimestamp(vkSession?.expires_at ?? null);
+  const vkTokenExpiresAt = formatSessionTimestamp(
+    settingsQuery.data?.vk_token_expires_at ?? null,
   );
   const isTelegramSessionActive =
     telegramSession !== null &&
     ACTIVE_TELEGRAM_SESSION_STATUSES.has(telegramSession.status);
+  const isVkSessionActive =
+    vkSession !== null && ACTIVE_VK_SESSION_STATUSES.has(vkSession.status);
   const isTelegramActionPending =
     startTelegramSessionMutation.isPending ||
     submitTelegramPasswordMutation.isPending ||
     cancelTelegramSessionMutation.isPending;
+  const isVkActionPending =
+    startVkSessionMutation.isPending ||
+    cancelVkSessionMutation.isPending ||
+    disconnectVkMutation.isPending ||
+    saveVkCommunityMutation.isPending;
+  const vkCommunities =
+    vkSession?.communities.length
+      ? vkSession.communities
+      : (vkCommunitiesQuery.data?.communities ?? []);
+  const selectedVkCommunity = vkCommunities.find(
+    (community) => community.group_id === formValues.vk_group_id,
+  );
+  const isVkDirty = VK_SETTINGS_FIELDS.some(
+    (key) => formValues[key] !== initialValues[key],
+  );
+  const isVkCommunityDirty =
+    formValues.vk_group_id !== initialValues.vk_group_id ||
+    formValues.vk_group_name !== initialValues.vk_group_name;
 
   function setFieldValue(key: keyof SettingsFormValues, value: string) {
     setFormValues((current) => ({
@@ -453,6 +724,15 @@ export function SettingsPage() {
     setVisibility((current) => ({
       ...current,
       [key]: !current[key],
+    }));
+  }
+
+  function handleVkCommunityChange(groupId: string) {
+    const selected = vkCommunities.find((community) => community.group_id === groupId);
+    setFormValues((current) => ({
+      ...current,
+      vk_group_id: groupId,
+      vk_group_name: selected?.name ?? "",
     }));
   }
 
@@ -511,6 +791,51 @@ export function SettingsPage() {
       setTelegramPassword("");
     }
   }, [telegramSession?.status]);
+
+  useEffect(() => {
+    if (!vkSessionId) {
+      writeStoredVkSessionId(null);
+      return;
+    }
+
+    if (!vkSession) {
+      writeStoredVkSessionId(vkSessionId);
+      return;
+    }
+
+    if (FINAL_VK_SESSION_STATUSES.has(vkSession.status)) {
+      writeStoredVkSessionId(null);
+      return;
+    }
+
+    writeStoredVkSessionId(vkSession.session_id);
+  }, [vkSession, vkSessionId]);
+
+  useEffect(() => {
+    if (!vkSessionQuery.error || !vkSessionId) {
+      return;
+    }
+
+    setVkSessionId(null);
+    writeStoredVkSessionId(null);
+    pushToast({
+      tone: "warning",
+      message: "Backend не нашел активный VK auth flow. Запустите подключение снова.",
+    });
+  }, [pushToast, vkSessionId, vkSessionQuery.error]);
+
+  useEffect(() => {
+    if (vkSession?.status !== "authorized") {
+      return;
+    }
+
+    void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
+    pushToast({
+      tone: "success",
+      message: "VK-аккаунт подключен. Можно выбрать рабочее сообщество.",
+    });
+  }, [pushToast, queryClient, vkSession?.status]);
 
   return (
     <div className="space-y-6">
@@ -788,6 +1113,326 @@ export function SettingsPage() {
               ) : null}
             </section>
           ))}
+
+          <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+            <div className="border-b border-slate-200 pb-4">
+              <h3 className="text-xl font-semibold text-slate-950">VK</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Подключение пользовательского VK-аккаунта и выбор сообщества для
+                публикаций на стену.
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <span className="text-sm font-medium text-slate-700">
+                  VK App ID
+                </span>
+                <input
+                  className="min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-teal-500"
+                  type="text"
+                  value={formValues.vk_client_id}
+                  placeholder="51699339"
+                  onChange={(event) =>
+                    setFieldValue("vk_client_id", event.target.value)
+                  }
+                />
+              </label>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <p className="text-sm font-medium text-slate-700">Статус VK</p>
+                <p className="mt-3 text-lg font-semibold text-slate-950">
+                  {formatVkConnectionStatus(settingsQuery.data?.vk_auth_status)}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  {describeVkConnection(settingsQuery.data)}
+                </p>
+                {settingsQuery.data?.vk_account_label ? (
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    Аккаунт:{" "}
+                    <span className="font-semibold text-slate-900">
+                      {settingsQuery.data.vk_account_label}
+                    </span>
+                  </p>
+                ) : null}
+                {vkTokenExpiresAt ? (
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    Срок текущего токена:{" "}
+                    <span className="font-semibold text-slate-900">
+                      {vkTokenExpiresAt}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-[28px] border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-900 to-sky-950 p-5 text-white shadow-[0_18px_60px_rgba(15,23,42,0.25)]">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-sky-200/80">
+                    VK Session
+                  </p>
+                  <h4 className="mt-2 text-xl font-semibold">
+                    OAuth-подключение аккаунта
+                  </h4>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+                    {describeVkSession(vkSession)}
+                  </p>
+                  {isVkDirty ? (
+                    <p className="mt-3 text-xs uppercase tracking-[0.2em] text-amber-200">
+                      Перед запуском будут сохранены измененные VK-поля.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-full bg-white px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                    disabled={
+                      settingsQuery.isLoading ||
+                      updateMutation.isPending ||
+                      isVkActionPending ||
+                      isVkSessionActive
+                    }
+                    onClick={() => {
+                      void startVkSessionMutation.mutateAsync();
+                    }}
+                  >
+                    {startVkSessionMutation.isPending
+                      ? "Запускаем…"
+                      : settingsQuery.data?.vk_auth_status === "connected"
+                        ? "Переподключить VK"
+                        : "Подключить VK"}
+                  </button>
+
+                  {vkSession ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/40 hover:bg-white/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-slate-400"
+                      disabled={!isVkSessionActive || cancelVkSessionMutation.isPending}
+                      onClick={() => {
+                        void cancelVkSessionMutation.mutateAsync();
+                      }}
+                    >
+                      {cancelVkSessionMutation.isPending
+                        ? "Останавливаем…"
+                        : "Остановить flow"}
+                    </button>
+                  ) : null}
+
+                  {settingsQuery.data?.vk_auth_status !== "not_connected" ? (
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center rounded-full border border-rose-300/30 bg-rose-500/10 px-5 py-3 text-sm font-semibold text-rose-50 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-slate-400"
+                      disabled={disconnectVkMutation.isPending}
+                      onClick={() => {
+                        void disconnectVkMutation.mutateAsync();
+                      }}
+                    >
+                      {disconnectVkMutation.isPending
+                        ? "Отключаем…"
+                        : "Отключить VK"}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_320px]">
+                <div className="space-y-4">
+                  <div
+                    className={[
+                      "rounded-3xl border px-4 py-4 shadow-sm",
+                      vkSessionToneClasses(vkSession?.status),
+                    ].join(" ")}
+                  >
+                    <p className="text-xs uppercase tracking-[0.24em] opacity-70">
+                      Статус
+                    </p>
+                    <p className="mt-2 text-lg font-semibold">
+                      {formatVkSessionStatus(vkSession?.status)}
+                    </p>
+
+                    {vkSession?.account_label ? (
+                      <p className="mt-2 text-sm leading-6">
+                        Авторизованный аккаунт:{" "}
+                        <span className="font-semibold">
+                          {vkSession.account_label}
+                        </span>
+                      </p>
+                    ) : null}
+
+                    {vkFlowExpiresAt ? (
+                      <p className="mt-2 text-sm leading-6">
+                        Flow истекает:{" "}
+                        <span className="font-semibold">{vkFlowExpiresAt}</span>
+                      </p>
+                    ) : null}
+
+                    {vkSessionQuery.isFetching && vkSessionId ? (
+                      <p className="mt-2 text-sm leading-6 opacity-80">
+                        Перечитываем VK-статус из backend…
+                      </p>
+                    ) : null}
+
+                    {vkSession?.error ? (
+                      <p className="mt-3 rounded-2xl border border-current/15 bg-white/60 px-3 py-3 text-sm leading-6">
+                        {vkSession.error}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-white">
+                          Рабочее сообщество
+                        </p>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          Выберите группу или публичную страницу, в которую PostFlow
+                          будет публиковать VK-посты.
+                        </p>
+                      </div>
+                      {vkCommunitiesQuery.isFetching ? (
+                        <span className="text-xs uppercase tracking-[0.2em] text-sky-200">
+                          Обновляем список…
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 flex flex-col gap-3 md:flex-row">
+                      <select
+                        className="min-w-0 flex-1 rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400"
+                        value={formValues.vk_group_id}
+                        onChange={(event) =>
+                          handleVkCommunityChange(event.target.value)
+                        }
+                        disabled={
+                          settingsQuery.data?.vk_auth_status === "not_connected" ||
+                          vkCommunities.length === 0
+                        }
+                      >
+                        <option value="">
+                          {vkCommunities.length === 0
+                            ? "Сначала подключите VK-аккаунт"
+                            : "Выберите сообщество"}
+                        </option>
+                        {vkCommunities.map((community) => (
+                          <option
+                            key={community.group_id}
+                            value={community.group_id}
+                          >
+                            {community.name} · {community.role}
+                            {community.can_post ? "" : " · no-post"}
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-full bg-sky-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-300"
+                        disabled={
+                          formValues.vk_group_id.trim().length === 0 ||
+                          saveVkCommunityMutation.isPending ||
+                          !isVkCommunityDirty
+                        }
+                        onClick={() => {
+                          void saveVkCommunityMutation.mutateAsync();
+                        }}
+                      >
+                        {saveVkCommunityMutation.isPending
+                          ? "Сохраняем…"
+                          : "Сохранить сообщество"}
+                      </button>
+                    </div>
+
+                    {selectedVkCommunity ? (
+                      <p className="mt-3 text-sm leading-6 text-slate-300">
+                        Будет использоваться:{" "}
+                        <span className="font-semibold text-white">
+                          {selectedVkCommunity.name}
+                        </span>
+                        {selectedVkCommunity.screen_name
+                          ? ` · vk.com/${selectedVkCommunity.screen_name}`
+                          : ""}
+                      </p>
+                    ) : settingsQuery.data?.vk_group_name ? (
+                      <p className="mt-3 text-sm leading-6 text-slate-300">
+                        Сейчас сохранено:{" "}
+                        <span className="font-semibold text-white">
+                          {settingsQuery.data.vk_group_name}
+                        </span>
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-white/10 bg-white/95 p-4 shadow-sm">
+                  <p className="text-sm font-medium text-slate-700">
+                    VK callback и диагностика
+                  </p>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    Redirect URI рассчитывается от текущего origin и должен быть
+                    зарегистрирован в VK как
+                    `http://localhost:3000/settings/vk/callback` или
+                    `http://127.0.0.1:3000/settings/vk/callback`.
+                  </p>
+                  <button
+                    type="button"
+                    className="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                    onClick={() => {
+                      setShowVkFallback((current) => !current);
+                    }}
+                  >
+                    {showVkFallback ? "Скрыть fallback" : "Advanced fallback"}
+                  </button>
+
+                  {showVkFallback ? (
+                    <div className="mt-4 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <label className="flex flex-col gap-2">
+                        <span className="text-sm font-medium text-slate-700">
+                          Ручной VK access token
+                        </span>
+                        <div className="flex gap-2">
+                          <input
+                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500"
+                            type={visibility.vk_access_token ? "text" : "password"}
+                            value={formValues.vk_access_token}
+                            placeholder="vk1.a...."
+                            onChange={(event) =>
+                              setFieldValue("vk_access_token", event.target.value)
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                            onClick={() => toggleVisibility("vk_access_token")}
+                          >
+                            {visibility.vk_access_token ? "Скрыть" : "Показать"}
+                          </button>
+                        </div>
+                      </label>
+
+                      <label className="flex flex-col gap-2">
+                        <span className="text-sm font-medium text-slate-700">
+                          Ручной VK group ID
+                        </span>
+                        <input
+                          className="min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500"
+                          type="text"
+                          value={formValues.vk_group_id}
+                          placeholder="123456"
+                          onChange={(event) =>
+                            setFieldValue("vk_group_id", event.target.value)
+                          }
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </section>
 
           <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50/90 p-5 md:flex-row md:items-center md:justify-between shadow-sm">
             <p className="text-sm text-slate-600">

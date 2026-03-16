@@ -108,11 +108,22 @@ export interface SettingsFormValues {
   telegram_api_hash: string;
   telegram_session_path: string;
   telegram_channel: string;
+  vk_client_id: string;
   vk_access_token: string;
   vk_group_id: string;
+  vk_group_name: string;
   image_api_key: string;
   image_base_url: string;
   image_default_model: string;
+}
+
+export type VkAuthStatus = "not_connected" | "connected" | "expired";
+
+export interface SettingsResponseData extends SettingsFormValues {
+  vk_refresh_token: string;
+  vk_account_label: string;
+  vk_auth_status: VkAuthStatus;
+  vk_token_expires_at: string | null;
 }
 
 export type TelegramSessionStatus =
@@ -132,4 +143,35 @@ export interface TelegramSessionState {
   qr_image_data_url: string | null;
   error: string | null;
   account_label: string | null;
+}
+
+export type VkAuthSessionStatus =
+  | "waiting_for_callback"
+  | "authorizing"
+  | "authorized"
+  | "expired"
+  | "failed"
+  | "cancelled";
+
+export interface VkCommunityOption {
+  group_id: string;
+  name: string;
+  screen_name: string | null;
+  role: "admin" | "editor";
+  can_post: boolean;
+}
+
+export interface VkAuthSessionState {
+  session_id: string;
+  status: VkAuthSessionStatus;
+  started_at: string;
+  expires_at: string | null;
+  authorize_url: string | null;
+  error: string | null;
+  account_label: string | null;
+  communities: VkCommunityOption[];
+}
+
+export interface VkCommunitiesResponse {
+  communities: VkCommunityOption[];
 }
