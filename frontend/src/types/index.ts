@@ -109,6 +109,7 @@ export interface SettingsFormValues {
   telegram_session_path: string;
   telegram_channel: string;
   vk_client_id: string;
+  vk_client_secret: string;
   vk_access_token: string;
   vk_group_id: string;
   vk_group_name: string;
@@ -173,5 +174,10 @@ export interface VkAuthSessionState {
 }
 
 export interface VkCommunitiesResponse {
+  communities: VkCommunityOption[];
+}
+
+export interface VkTokenConnectResponse {
+  settings: SettingsResponseData;
   communities: VkCommunityOption[];
 }

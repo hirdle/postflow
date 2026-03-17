@@ -21,6 +21,7 @@ class SettingsResponse(BaseModel):
     telegram_session_path: str | None = None
     telegram_channel: str | None = None
     vk_client_id: str | None = None
+    vk_client_secret: str | None = None
     vk_access_token: str | None = None
     vk_refresh_token: str | None = None
     vk_group_id: str | None = None
@@ -96,10 +97,12 @@ class VkAuthSessionExchangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     payload: str | None = None
+    access_token: str | None = None
+    expires_in: str | None = None
     code: str | None = None
     state: str | None = None
-    device_id: str | None = None
-    type: str | None = None
+    user_id: str | None = None
+    scope: str | None = None
     error: str | None = None
     error_description: str | None = None
 
@@ -120,4 +123,17 @@ class VkAuthSessionResponse(BaseModel):
 class VkCommunitiesResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    communities: list[VkCommunityOption]
+
+
+class VkTokenConnectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    value: str
+
+
+class VkTokenConnectResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    settings: SettingsResponse
     communities: list[VkCommunityOption]

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -14,10 +12,11 @@ from uuid import uuid4
 import httpx
 
 from app.infra.vk_client import (
+    VK_API_VERSION,
     VKClient,
     VKCommunity,
-    VK_ID_AUTHORIZE_BASE,
-    VK_ID_TOKEN_URL,
+    VK_OAUTH_AUTHORIZE_BASE,
+    VK_OAUTH_TOKEN_URL,
     VK_OPTIONAL_SCOPES,
     VK_REQUIRED_SCOPES,
     delete_vk_settings,
@@ -64,7 +63,6 @@ class VkAuthFlow:
     client_id: str
     redirect_uri: str
     state: str
-    code_verifier: str
 
     def snapshot(self) -> VkAuthSnapshot:
         return VkAuthSnapshot(
@@ -91,13 +89,13 @@ class VkAuthManager:
         redirect_uri: str,
     ) -> VkAuthSnapshot:
         normalized_redirect_uri = _normalize_redirect_uri(redirect_uri)
-        client_id = await _load_vk_client_id()
+        client_id, _ = await _load_vk_app_credentials()
         await self._clear_flows()
 
-        code_verifier = _generate_code_verifier()
-        state = _generate_state()
+        session_id = uuid4().hex
+        state = _generate_state(session_id)
         flow = VkAuthFlow(
-            session_id=uuid4().hex,
+            session_id=session_id,
             status="waiting_for_callback",
             started_at=_utcnow(),
             expires_at=_utcnow() + VK_AUTH_SESSION_TTL,
@@ -105,7 +103,6 @@ class VkAuthManager:
                 client_id=client_id,
                 redirect_uri=normalized_redirect_uri,
                 state=state,
-                code_challenge=_build_code_challenge(code_verifier),
             ),
             error=None,
             account_label=None,
@@ -113,7 +110,6 @@ class VkAuthManager:
             client_id=client_id,
             redirect_uri=normalized_redirect_uri,
             state=state,
-            code_verifier=code_verifier,
         )
         await self._replace_flow(flow)
         return flow.snapshot()
@@ -138,76 +134,80 @@ class VkAuthManager:
         if expired_snapshot is not None:
             raise RuntimeError("VK authorization session expired. Start a new session.")
 
+        normalized_payload = _normalize_exchange_payload(payload)
         async with self._lock:
             flow = self._flows.get(session_id)
             if flow is None:
                 raise KeyError(session_id)
-            if flow.status in {"authorized", "cancelled"}:
+            if flow.status == "authorizing":
+                raise RuntimeError("VK authorization session is already being finalized.")
+            if flow.status in {"authorized", "cancelled", "failed", "expired"}:
                 raise RuntimeError("VK authorization session is already finalized.")
 
-        normalized_payload = _normalize_exchange_payload(payload)
-        if normalized_payload.get("error"):
-            message = normalized_payload.get("error_description") or normalized_payload["error"]
+            if normalized_payload.get("error"):
+                message = normalized_payload.get("error_description") or normalized_payload["error"]
+                flow.status = "failed"
+                flow.error = message
+                flow.authorize_url = None
+                flow.expires_at = None
+                raise RuntimeError(message)
+
+            if normalized_payload.get("state") != flow.state:
+                message = "VK auth state mismatch. Start the authorization again."
+                flow.status = "failed"
+                flow.error = message
+                flow.authorize_url = None
+                flow.expires_at = None
+                raise ValueError(message)
+
+            flow.status = "authorizing"
+            flow.error = None
+            client_id = flow.client_id
+            redirect_uri = flow.redirect_uri
+
+        access_token = normalized_payload.get("access_token")
+        token_expires_at = _build_expiration_timestamp(normalized_payload.get("expires_in"))
+        token_scope = _normalize_optional_value(normalized_payload.get("scope"))
+
+        if normalized_payload.get("code"):
+            try:
+                _, client_secret = await _load_vk_app_credentials()
+                token_payload = await self._exchange_code(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    redirect_uri=redirect_uri,
+                    code=str(normalized_payload["code"]),
+                )
+            except Exception as exc:
+                message = str(exc)
+                await self._finalize_flow(session_id, status="failed", error=message)
+                raise RuntimeError(message) from exc
+
+            access_token = _normalize_optional_value(token_payload.get("access_token"))
+            token_expires_at = _build_expiration_timestamp(token_payload.get("expires_in"))
+            token_scope = _normalize_optional_value(token_payload.get("scope"))
+
+        if not access_token:
+            message = "VK callback payload does not contain an access token."
             await self._finalize_flow(session_id, status="failed", error=message)
-            raise RuntimeError(message)
+            raise ValueError(message)
 
-        if normalized_payload.get("state") != flow.state:
-            await self._finalize_flow(
-                session_id,
-                status="failed",
-                error="VK auth state mismatch. Start the authorization again.",
-            )
-            raise ValueError("VK auth state mismatch. Start the authorization again.")
-
-        code = normalized_payload.get("code")
-        device_id = normalized_payload.get("device_id")
-        if not code:
-            raise ValueError("VK callback payload does not contain an authorization code.")
-        if not device_id:
-            raise ValueError("VK callback payload does not contain a device_id.")
-
-        await self._patch_flow(session_id, status="authorizing", error=None)
-
-        try:
-            token_payload = await self._exchange_code(
-                flow=flow,
-                code=code,
-                device_id=device_id,
-            )
-        except Exception as exc:
-            message = str(exc)
-            await self._finalize_flow(session_id, status="failed", error=message)
-            raise RuntimeError(message) from exc
-        scope = _normalize_optional_value(token_payload.get("scope"))
-        missing_scopes = _missing_required_scopes(scope)
-        if missing_scopes:
-            message = (
-                "VK token is missing required scopes: "
-                + ", ".join(sorted(missing_scopes))
-                + "."
-            )
-            await self._finalize_flow(session_id, status="failed", error=message)
-            raise RuntimeError(message)
-
-        access_token = _get_required_payload_value(token_payload, "access_token")
-        refresh_token = _normalize_optional_value(token_payload.get("refresh_token"))
         user_client = VKClient(
             access_token=access_token,
-            client_id=flow.client_id,
-            refresh_token=refresh_token,
-            device_id=device_id,
-            token_expires_at=_build_expiration_timestamp(token_payload.get("expires_in")),
-            token_scope=scope,
+            client_id=client_id,
+            token_expires_at=token_expires_at,
+            token_scope=token_scope,
             http_client=self._http,
         )
         try:
+            scope = await user_client.ensure_required_permissions()
             profile = await user_client.get_profile()
             communities = await user_client.list_communities()
 
             await _persist_vk_auth_result(
                 access_token=access_token,
-                refresh_token=refresh_token,
-                device_id=device_id,
+                refresh_token=None,
+                device_id=None,
                 scope=scope,
                 expires_at=user_client.token_expires_at,
                 user_id=profile.user_id,
@@ -247,24 +247,26 @@ class VkAuthManager:
     async def _exchange_code(
         self,
         *,
-        flow: VkAuthFlow,
+        client_id: str,
+        client_secret: str,
+        redirect_uri: str,
         code: str,
-        device_id: str,
     ) -> dict[str, Any]:
-        response = await self._http.post(
-            VK_ID_TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
+        response = await self._http.get(
+            VK_OAUTH_TOKEN_URL,
+            params={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "redirect_uri": redirect_uri,
                 "code": code,
-                "code_verifier": flow.code_verifier,
-                "client_id": flow.client_id,
-                "device_id": device_id,
-                "redirect_uri": flow.redirect_uri,
-                "state": flow.state,
             },
         )
-        response.raise_for_status()
-        payload = response.json()
+        payload = _try_parse_response_json(response)
+        if response.status_code >= 400:
+            detail = _extract_vk_oauth_error(payload) or _extract_response_text(response)
+            raise RuntimeError(
+                f"VK token exchange failed ({response.status_code}): {detail or 'unknown error'}"
+            )
         if payload.get("error"):
             error = payload.get("error_description") or payload["error"]
             raise RuntimeError(f"VK token exchange failed: {error}")
@@ -351,19 +353,22 @@ def _normalize_redirect_uri(redirect_uri: str) -> str:
     return normalized
 
 
-async def _load_vk_client_id() -> str:
-    settings_map = await load_vk_settings_map(("vk_client_id",))
+async def _load_vk_app_credentials() -> tuple[str, str]:
+    settings_map = await load_vk_settings_map(("vk_client_id", "vk_client_secret"))
     client_id = _normalize_optional_value(settings_map.get("vk_client_id"))
     if client_id is None:
         raise ValueError("VK client ID is not configured in app_settings.")
-    return client_id
+    client_secret = _normalize_optional_value(settings_map.get("vk_client_secret"))
+    if client_secret is None:
+        raise ValueError("VK client secret is not configured in app_settings.")
+    return client_id, client_secret
 
 
 async def _persist_vk_auth_result(
     *,
     access_token: str,
     refresh_token: str | None,
-    device_id: str,
+    device_id: str | None,
     scope: str | None,
     expires_at: datetime | None,
     user_id: str,
@@ -372,7 +377,6 @@ async def _persist_vk_auth_result(
 ) -> None:
     current = await load_vk_settings_map(("vk_group_id", "vk_group_name"))
     current_group_id = _normalize_optional_value(current.get("vk_group_id"))
-    current_group_name = _normalize_optional_value(current.get("vk_group_name"))
     selected_group = None
     if current_group_id:
         selected_group = next(
@@ -403,42 +407,35 @@ def _build_authorize_url(
     client_id: str,
     redirect_uri: str,
     state: str,
-    code_challenge: str,
 ) -> str:
     query = urlencode(
         {
             "response_type": "code",
             "client_id": client_id,
-            "scope": " ".join(sorted(VK_REQUIRED_SCOPES | VK_OPTIONAL_SCOPES)),
+            "display": "page",
+            "scope": ",".join(sorted(VK_REQUIRED_SCOPES | VK_OPTIONAL_SCOPES)),
             "redirect_uri": redirect_uri,
             "state": state,
-            "code_challenge": code_challenge,
-            "code_challenge_method": "S256",
+            "revoke": 1,
+            "v": VK_API_VERSION,
         }
     )
-    return f"{VK_ID_AUTHORIZE_BASE}?{query}"
+    return f"{VK_OAUTH_AUTHORIZE_BASE}?{query}"
 
 
-def _generate_code_verifier() -> str:
-    return base64.urlsafe_b64encode(hashlib.sha256(uuid4().hex.encode("utf-8")).digest()).decode("utf-8").rstrip("=")
-
-
-def _generate_state() -> str:
-    return uuid4().hex + uuid4().hex
-
-
-def _build_code_challenge(code_verifier: str) -> str:
-    digest = hashlib.sha256(code_verifier.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+def _generate_state(session_id: str) -> str:
+    return f"{session_id}.{uuid4().hex}{uuid4().hex}"
 
 
 def _normalize_exchange_payload(payload: dict[str, str | None]) -> dict[str, str | None]:
     raw_payload = _normalize_optional_value(payload.get("payload"))
     normalized = {
         "code": _normalize_optional_value(payload.get("code")),
+        "access_token": _normalize_optional_value(payload.get("access_token")),
+        "expires_in": _normalize_optional_value(payload.get("expires_in")),
         "state": _normalize_optional_value(payload.get("state")),
-        "device_id": _normalize_optional_value(payload.get("device_id")),
-        "type": _normalize_optional_value(payload.get("type")),
+        "user_id": _normalize_optional_value(payload.get("user_id")),
+        "scope": _normalize_optional_value(payload.get("scope")),
         "error": _normalize_optional_value(payload.get("error")),
         "error_description": _normalize_optional_value(payload.get("error_description")),
     }
@@ -456,26 +453,6 @@ def _normalize_exchange_payload(payload: dict[str, str | None]) -> dict[str, str
             normalized[key] = value
 
     return normalized
-
-
-def _missing_required_scopes(scope: str | None) -> set[str]:
-    granted = _parse_scope(scope)
-    return set(VK_REQUIRED_SCOPES.difference(granted))
-
-
-def _parse_scope(scope: str | None) -> set[str]:
-    normalized = _normalize_optional_value(scope)
-    if normalized is None:
-        return set()
-    replaced = normalized.replace(",", " ")
-    return {part.strip() for part in replaced.split() if part.strip()}
-
-
-def _get_required_payload_value(payload: dict[str, Any], key: str) -> str:
-    value = _normalize_optional_value(payload.get(key))
-    if value is None:
-        raise RuntimeError(f"VK token exchange response does not contain `{key}`.")
-    return value
 
 
 def _build_expiration_timestamp(expires_in: object) -> datetime | None:
@@ -501,6 +478,35 @@ def _normalize_optional_value(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _try_parse_response_json(response: Any) -> dict[str, Any]:
+    try:
+        payload = response.json()
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_vk_oauth_error(payload: dict[str, Any]) -> str | None:
+    error = _normalize_optional_value(payload.get("error"))
+    description = _normalize_optional_value(payload.get("error_description"))
+    if error and description:
+        return f"{error}: {description}"
+    return error or description
+
+
+def _extract_response_text(response: Any) -> str | None:
+    raw_text = getattr(response, "text", None)
+    normalized = _normalize_optional_value(raw_text)
+    if normalized is not None:
+        return normalized
+    if hasattr(response, "read"):
+        try:
+            return _normalize_optional_value(response.read())
+        except Exception:
+            return None
+    return None
 
 
 def _utcnow() -> datetime:

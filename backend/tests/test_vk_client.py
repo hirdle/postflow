@@ -102,6 +102,32 @@ class CommunitiesHttpClient:
         )
 
 
+class PermissionsHttpClient:
+    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
+        if url.endswith("/account.getAppPermissions"):
+            return FakeResponse({"response": 335876})
+        raise AssertionError(f"Unexpected request: {url} {data}")
+
+
+class MissingWallPermissionsHttpClient:
+    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
+        if url.endswith("/account.getAppPermissions"):
+            return FakeResponse({"response": 327684})
+        raise AssertionError(f"Unexpected request: {url} {data}")
+
+
+class InvalidTokenHttpClient:
+    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
+        return FakeResponse(
+            {
+                "error": {
+                    "error_code": 5,
+                    "error_msg": "User authorization failed",
+                }
+            }
+        )
+
+
 class VKClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_access_token_persists_new_credentials_and_retries_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -149,6 +175,29 @@ class VKClientTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "does not allow wall posting"):
             await client.validate_community_access("99")
 
+    async def test_ensure_required_permissions_reads_permission_bitmask(self) -> None:
+        client = VKClient(
+            access_token="vk-token",
+            http_client=PermissionsHttpClient(),
+        )
+
+        granted_scope = await client.ensure_required_permissions()
+
+        self.assertEqual(granted_scope, "groups offline photos wall")
+        self.assertEqual(client.token_scope, "groups offline photos wall")
+
+    async def test_ensure_required_permissions_reports_granted_scopes_and_bitmask(self) -> None:
+        client = VKClient(
+            access_token="vk-token",
+            http_client=MissingWallPermissionsHttpClient(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"missing required scopes: wall\. Granted scopes: groups offline photos\. Permissions bitmask: 327684\.",
+        ):
+            await client.ensure_required_permissions()
+
     async def test_expired_token_refreshes_before_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "publish.db"
@@ -170,3 +219,15 @@ class VKClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(deleted)
         self.assertEqual(http_client.wall_delete_attempts, 1)
+
+    async def test_invalid_token_without_refresh_metadata_reports_reconnect(self) -> None:
+        client = VKClient(
+            access_token="bad-token",
+            http_client=InvalidTokenHttpClient(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "VK access token is invalid or expired. Reconnect VK in settings.",
+        ):
+            await client.get_app_permissions()

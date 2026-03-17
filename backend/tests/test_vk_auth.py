@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import unittest
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from app.infra.vk_auth import VkAuthManager, _utcnow
+from app.infra.vk_client import VKCommunity, VKUserProfile
 
 
 class FakeResponse:
@@ -25,27 +27,38 @@ class FakeHttpClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict | None]] = []
 
-    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
-        self.calls.append((url, data))
+    async def get(self, url: str, params=None):  # noqa: ANN001
+        self.calls.append((url, params))
 
-        if url.endswith("/auth"):
+        if url.endswith("/access_token"):
             return FakeResponse(
                 {
                     "access_token": "vk-access-token",
-                    "refresh_token": "vk-refresh-token",
                     "expires_in": 3600,
-                    "scope": "wall photos groups offline",
+                    "user_id": 12345,
                 }
             )
 
-        if url.endswith("/user_info"):
+        raise AssertionError(f"Unexpected request: {url} {json.dumps(params or {})}")
+
+    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
+        self.calls.append((url, data))
+
+        if url.endswith("/account.getAppPermissions"):
+            return FakeResponse(
+                {"response": 335876}
+            )
+
+        if url.endswith("/users.get"):
             return FakeResponse(
                 {
-                    "user": {
-                        "user_id": "12345",
-                        "first_name": "Bio",
-                        "last_name": "Volt",
-                    }
+                    "response": [
+                        {
+                            "id": 12345,
+                            "first_name": "Bio",
+                            "last_name": "Volt",
+                        }
+                    ]
                 }
             )
 
@@ -91,14 +104,15 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         manager = VkAuthManager(http_client=FakeHttpClient())
 
         with patch(
-            "app.infra.vk_auth._load_vk_client_id",
-            AsyncMock(return_value="51699339"),
+            "app.infra.vk_auth._load_vk_app_credentials",
+            AsyncMock(return_value=("51699339", "vk-secure-key")),
         ):
             snapshot = await manager.start("http://localhost:3000/settings/vk/callback")
 
         self.assertEqual(snapshot.status, "waiting_for_callback")
         self.assertIsNotNone(snapshot.authorize_url)
         self.assertIn("client_id=51699339", snapshot.authorize_url or "")
+        self.assertIn("response_type=code", snapshot.authorize_url or "")
         self.assertIn("redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fsettings%2Fvk%2Fcallback", snapshot.authorize_url or "")
 
     async def test_exchange_authorizes_and_persists_vk_result(self) -> None:
@@ -107,14 +121,18 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         persisted_payloads: list[dict[str, str | None]] = []
 
         with patch(
-            "app.infra.vk_auth._load_vk_client_id",
-            AsyncMock(return_value="51699339"),
+            "app.infra.vk_auth._load_vk_app_credentials",
+            AsyncMock(return_value=("51699339", "vk-secure-key")),
         ):
             snapshot = await manager.start("http://localhost:3000/settings/vk/callback")
 
         flow = manager._flows[snapshot.session_id]
 
         with (
+            patch(
+                "app.infra.vk_auth._load_vk_app_credentials",
+                AsyncMock(return_value=("51699339", "vk-secure-key")),
+            ),
             patch(
                 "app.infra.vk_auth.load_vk_settings_map",
                 AsyncMock(return_value={"vk_group_id": None, "vk_group_name": None}),
@@ -133,7 +151,6 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "code": "vk-code",
                     "state": flow.state,
-                    "device_id": "device-123",
                 },
             )
 
@@ -142,13 +159,14 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(authorized.communities), 2)
         self.assertEqual(persisted_payloads[0]["vk_access_token"], "vk-access-token")
         self.assertEqual(persisted_payloads[0]["vk_user_id"], "12345")
+        self.assertEqual(persisted_payloads[0]["vk_token_scope"], "groups offline photos wall")
 
     async def test_exchange_rejects_state_mismatch(self) -> None:
         manager = VkAuthManager(http_client=FakeHttpClient())
 
         with patch(
-            "app.infra.vk_auth._load_vk_client_id",
-            AsyncMock(return_value="51699339"),
+            "app.infra.vk_auth._load_vk_app_credentials",
+            AsyncMock(return_value=("51699339", "vk-secure-key")),
         ):
             snapshot = await manager.start("http://localhost:3000/settings/vk/callback")
 
@@ -158,7 +176,6 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "code": "vk-code",
                     "state": "wrong-state",
-                    "device_id": "device-123",
                 },
             )
 
@@ -169,8 +186,8 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
         manager = VkAuthManager(http_client=FakeHttpClient())
 
         with patch(
-            "app.infra.vk_auth._load_vk_client_id",
-            AsyncMock(return_value="51699339"),
+            "app.infra.vk_auth._load_vk_app_credentials",
+            AsyncMock(return_value=("51699339", "vk-secure-key")),
         ):
             snapshot = await manager.start("http://localhost:3000/settings/vk/callback")
 
@@ -180,3 +197,91 @@ class VkAuthManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(expired.status, "expired")
         self.assertIsNone(expired.authorize_url)
+
+    async def test_exchange_rejects_duplicate_finalize_while_code_is_in_flight(self) -> None:
+        manager = VkAuthManager(http_client=FakeHttpClient())
+        token_exchange_started = asyncio.Event()
+        allow_token_exchange_finish = asyncio.Event()
+
+        async def delayed_exchange_code(**_: str) -> dict[str, object]:
+            token_exchange_started.set()
+            await allow_token_exchange_finish.wait()
+            return {
+                "access_token": "vk-access-token",
+                "expires_in": 3600,
+            }
+
+        with patch(
+            "app.infra.vk_auth._load_vk_app_credentials",
+            AsyncMock(return_value=("51699339", "vk-secure-key")),
+        ):
+            snapshot = await manager.start("http://localhost:3000/settings/vk/callback")
+
+        flow = manager._flows[snapshot.session_id]
+
+        with (
+            patch.object(manager, "_exchange_code", AsyncMock(side_effect=delayed_exchange_code)) as exchange_code_mock,
+            patch(
+                "app.infra.vk_auth.VKClient.ensure_required_permissions",
+                AsyncMock(return_value="groups offline photos wall"),
+            ),
+            patch(
+                "app.infra.vk_auth.VKClient.get_profile",
+                AsyncMock(
+                    return_value=VKUserProfile(
+                        user_id="12345",
+                        first_name="Bio",
+                        last_name="Volt",
+                    )
+                ),
+            ),
+            patch(
+                "app.infra.vk_auth.VKClient.list_communities",
+                AsyncMock(
+                    return_value=[
+                        VKCommunity(
+                            group_id="77",
+                            name="BioVolt",
+                            screen_name="biovolt",
+                            role="admin",
+                            can_post=True,
+                        )
+                    ]
+                ),
+            ),
+            patch(
+                "app.infra.vk_auth.load_vk_settings_map",
+                AsyncMock(return_value={"vk_group_id": None, "vk_group_name": None}),
+            ),
+            patch("app.infra.vk_auth.upsert_vk_settings", AsyncMock()),
+            patch("app.infra.vk_auth.delete_vk_settings", AsyncMock()),
+            patch(
+                "app.infra.vk_auth._load_vk_app_credentials",
+                AsyncMock(return_value=("51699339", "vk-secure-key")),
+            ),
+        ):
+            first_exchange = asyncio.create_task(
+                manager.exchange(
+                    snapshot.session_id,
+                    {
+                        "code": "vk-code",
+                        "state": flow.state,
+                    },
+                )
+            )
+            await token_exchange_started.wait()
+
+            with self.assertRaisesRegex(RuntimeError, "already being finalized"):
+                await manager.exchange(
+                    snapshot.session_id,
+                    {
+                        "code": "vk-code",
+                        "state": flow.state,
+                    },
+                )
+
+            allow_token_exchange_finish.set()
+            authorized = await first_exchange
+
+        self.assertEqual(authorized.status, "authorized")
+        self.assertEqual(exchange_code_mock.await_count, 1)

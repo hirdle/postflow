@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import contextlib
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, HTTPException, status
 
 from app.infra.database import get_db
 from app.infra.telegram_qr_auth import get_telegram_qr_auth_manager
 from app.infra.vk_auth import get_vk_auth_manager
-from app.infra.vk_client import VKClient
+from app.infra.vk_client import (
+    VKClient,
+    VKCommunity,
+    delete_vk_settings,
+    load_vk_settings_map,
+    upsert_vk_settings,
+)
 from app.schemas.settings import (
     SettingsResponse,
     SettingsUpdate,
@@ -18,6 +26,8 @@ from app.schemas.settings import (
     VkAuthSessionResponse,
     VkAuthSessionStartRequest,
     VkCommunitiesResponse,
+    VkTokenConnectRequest,
+    VkTokenConnectResponse,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -28,6 +38,7 @@ SETTINGS_KEYS = (
     "telegram_session_path",
     "telegram_channel",
     "vk_client_id",
+    "vk_client_secret",
     "vk_access_token",
     "vk_refresh_token",
     "vk_group_id",
@@ -52,6 +63,7 @@ VK_CONNECTION_CLEAR_KEYS = (
 SECRET_KEYS = {
     "telegram_api_id",
     "telegram_api_hash",
+    "vk_client_secret",
     "vk_access_token",
     "vk_refresh_token",
     "image_api_key",
@@ -66,6 +78,12 @@ VK_METADATA_RESET_KEYS = (
     "vk_group_id",
     "vk_group_name",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedVkTokenInput:
+    access_token: str
+    token_expires_at: datetime | None
 
 
 @router.get("", response_model=SettingsResponse)
@@ -283,6 +301,22 @@ async def get_vk_communities() -> VkCommunitiesResponse:
     return VkCommunitiesResponse(communities=communities)
 
 
+@router.post(
+    "/vk/token",
+    response_model=VkTokenConnectResponse,
+)
+async def connect_vk_token(payload: VkTokenConnectRequest) -> VkTokenConnectResponse:
+    try:
+        communities = await _connect_vk_token(payload.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    settings = await _build_settings_response()
+    return VkTokenConnectResponse(settings=settings, communities=communities)
+
+
 @router.delete(
     "/vk/connection",
     response_model=SettingsResponse,
@@ -307,6 +341,33 @@ async def delete_vk_connection() -> SettingsResponse:
         await db.commit()
 
     return await _build_settings_response()
+
+
+async def _connect_vk_token(value: str) -> list[VKCommunity]:
+    parsed = _parse_vk_token_input(value)
+    existing = await _load_settings_map()
+    client = VKClient(
+        access_token=parsed.access_token,
+        client_id=existing.get("vk_client_id"),
+        token_expires_at=parsed.token_expires_at,
+    )
+
+    try:
+        scope = await client.ensure_required_permissions()
+        profile = await client.get_profile()
+        communities = await client.list_communities()
+    finally:
+        await client.close()
+
+    await _persist_vk_manual_token_result(
+        access_token=parsed.access_token,
+        scope=scope,
+        expires_at=client.token_expires_at,
+        user_id=profile.user_id,
+        account_label=profile.account_label,
+        communities=communities,
+    )
+    return communities
 
 
 async def _load_settings_map() -> dict[str, str | None]:
@@ -356,6 +417,34 @@ def _normalize_incoming_settings(
     return normalized_updates
 
 
+def _parse_vk_token_input(value: str) -> ParsedVkTokenInput:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("VK access token or blank.html URL must not be empty.")
+
+    params: dict[str, list[str]] = {}
+    parsed_url = urlparse(normalized)
+    if parsed_url.scheme or parsed_url.netloc or "#" in normalized or "?" in normalized:
+        params.update(parse_qs(parsed_url.query, keep_blank_values=False))
+        params.update(parse_qs(parsed_url.fragment, keep_blank_values=False))
+        if "access_token" not in params and normalized.startswith("#"):
+            params.update(parse_qs(normalized.lstrip("#"), keep_blank_values=False))
+
+    access_token = _first_query_value(params, "access_token")
+    if params and access_token is None:
+        raise ValueError("VK callback URL does not contain access_token.")
+    if access_token is None:
+        access_token = normalized
+
+    if not access_token:
+        raise ValueError("VK callback URL does not contain access_token.")
+
+    return ParsedVkTokenInput(
+        access_token=access_token,
+        token_expires_at=_build_expiration_timestamp(_first_query_value(params, "expires_in")),
+    )
+
+
 async def _resolve_vk_community(
     *,
     group_id: str,
@@ -378,6 +467,46 @@ async def _resolve_vk_community(
         return await client.validate_community_access(group_id)
     finally:
         await client.close()
+
+
+async def _persist_vk_manual_token_result(
+    *,
+    access_token: str,
+    scope: str | None,
+    expires_at: datetime | None,
+    user_id: str,
+    account_label: str,
+    communities: list[VKCommunity],
+) -> None:
+    current = await load_vk_settings_map(("vk_group_id", "vk_group_name"))
+    current_group_id = (current.get("vk_group_id") or "").strip() or None
+    selected_group = None
+    if current_group_id:
+        selected_group = next(
+            (
+                community
+                for community in communities
+                if community.group_id == current_group_id and community.can_post
+            ),
+            None,
+        )
+
+    updates = {
+        "vk_access_token": access_token,
+        "vk_refresh_token": None,
+        "vk_device_id": None,
+        "vk_token_scope": scope,
+        "vk_token_expires_at": _serialize_datetime(expires_at),
+        "vk_user_id": user_id,
+        "vk_account_label": account_label,
+    }
+    if selected_group is not None:
+        updates["vk_group_id"] = selected_group.group_id
+        updates["vk_group_name"] = selected_group.name
+
+    await upsert_vk_settings(updates)
+    if selected_group is None and current_group_id is not None:
+        await delete_vk_settings(("vk_group_id", "vk_group_name"))
 
 
 def _mask_settings(settings_map: dict[str, str | None]) -> dict[str, str | None]:
@@ -411,6 +540,33 @@ def _parse_optional_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _build_expiration_timestamp(value: str | None) -> datetime | None:
+    normalized = (value or "").strip()
+    if not normalized or normalized == "0":
+        return None
+    try:
+        seconds = int(normalized)
+    except ValueError:
+        return None
+    if seconds <= 0:
+        return None
+    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _first_query_value(values: dict[str, list[str]], key: str) -> str | None:
+    raw = values.get(key)
+    if not raw:
+        return None
+    normalized = raw[0].strip()
+    return normalized or None
 
 
 def _mask_secret(value: str | None) -> str | None:

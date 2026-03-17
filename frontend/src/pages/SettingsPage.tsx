@@ -3,20 +3,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../api/client";
 import { useToast } from "../components/ToastProvider";
+import { formatBackendErrorMessage } from "../lib/errors";
 import type {
   SettingsResponseData,
   SettingsFormValues,
   TelegramSessionState,
   TelegramSessionStatus,
-  VkAuthSessionState,
-  VkAuthSessionStatus,
   VkCommunitiesResponse,
   VkCommunityOption,
+  VkTokenConnectResponse,
 } from "../types";
 
 const SECRET_FIELDS = new Set<keyof SettingsFormValues>([
   "telegram_api_id",
   "telegram_api_hash",
+  "vk_client_secret",
   "vk_access_token",
   "image_api_key",
 ]);
@@ -26,7 +27,9 @@ const TELEGRAM_SETTINGS_FIELDS: Array<keyof SettingsFormValues> = [
   "telegram_session_path",
   "telegram_channel",
 ];
-const VK_SETTINGS_FIELDS: Array<keyof SettingsFormValues> = ["vk_client_id"];
+const VK_SETTINGS_FIELDS: Array<keyof SettingsFormValues> = [
+  "vk_client_id",
+];
 const ACTIVE_TELEGRAM_SESSION_STATUSES = new Set<TelegramSessionStatus>([
   "waiting_for_scan",
   "password_required",
@@ -38,17 +41,8 @@ const FINAL_TELEGRAM_SESSION_STATUSES = new Set<TelegramSessionStatus>([
   "cancelled",
 ]);
 const TELEGRAM_SESSION_STORAGE_KEY = "postflow:telegram-session-id";
-const ACTIVE_VK_SESSION_STATUSES = new Set<VkAuthSessionStatus>([
-  "waiting_for_callback",
-  "authorizing",
-]);
-const FINAL_VK_SESSION_STATUSES = new Set<VkAuthSessionStatus>([
-  "authorized",
-  "expired",
-  "failed",
-  "cancelled",
-]);
-const VK_SESSION_STORAGE_KEY = "postflow:vk-session-id";
+const VK_IMPLICIT_REDIRECT_URI = "https://oauth.vk.com/blank.html";
+const VK_IMPLICIT_SCOPE = "wall,photos,groups,offline";
 
 const EMPTY_FORM: SettingsFormValues = {
   telegram_api_id: "",
@@ -56,6 +50,7 @@ const EMPTY_FORM: SettingsFormValues = {
   telegram_session_path: "",
   telegram_channel: "",
   vk_client_id: "",
+  vk_client_secret: "",
   vk_access_token: "",
   vk_group_id: "",
   vk_group_name: "",
@@ -186,24 +181,6 @@ function writeStoredTelegramSessionId(sessionId: string | null) {
   window.sessionStorage.removeItem(TELEGRAM_SESSION_STORAGE_KEY);
 }
 
-function readStoredVkSessionId() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  return window.localStorage.getItem(VK_SESSION_STORAGE_KEY);
-}
-
-function writeStoredVkSessionId(sessionId: string | null) {
-  if (typeof window === "undefined") {
-    return;
-  }
-  if (sessionId) {
-    window.localStorage.setItem(VK_SESSION_STORAGE_KEY, sessionId);
-    return;
-  }
-  window.localStorage.removeItem(VK_SESSION_STORAGE_KEY);
-}
-
 function formatTelegramSessionStatus(status: TelegramSessionStatus | null | undefined) {
   switch (status) {
     case "waiting_for_scan":
@@ -271,7 +248,7 @@ function formatVkConnectionStatus(status: SettingsResponseData["vk_auth_status"]
 
 function describeVkConnection(settings: SettingsResponseData | undefined) {
   if (!settings || settings.vk_auth_status === "not_connected") {
-    return "Укажите VK App ID и запустите подключение. После подтверждения входа backend сохранит пользовательский токен и загрузит доступные сообщества.";
+    return "Укажите VK App ID standalone-приложения, откройте VK OAuth helper и вставьте итоговый URL из blank.html или сам access token. Backend проверит wall/photos/groups и загрузит доступные сообщества.";
   }
   if (settings.vk_auth_status === "expired") {
     return "Сохраненный VK токен истек. Переподключите аккаунт, чтобы обновить токен и восстановить публикацию в сообщество.";
@@ -280,60 +257,6 @@ function describeVkConnection(settings: SettingsResponseData | undefined) {
     return `Аккаунт подключен. Текущее сообщество для публикации: ${settings.vk_group_name}.`;
   }
   return "Аккаунт подключен, но рабочее сообщество еще не выбрано.";
-}
-
-function formatVkSessionStatus(status: VkAuthSessionStatus | null | undefined) {
-  switch (status) {
-    case "waiting_for_callback":
-      return "Ждем возврата из VK";
-    case "authorizing":
-      return "Завершаем авторизацию";
-    case "authorized":
-      return "VK подключен";
-    case "expired":
-      return "VK flow истек";
-    case "failed":
-      return "VK flow завершился ошибкой";
-    case "cancelled":
-      return "VK flow отменен";
-    default:
-      return "VK flow не запущен";
-  }
-}
-
-function describeVkSession(session: VkAuthSessionState | null) {
-  if (!session) {
-    return "Нажмите кнопку подключения, откроется VK auth flow. После возврата callback-page передаст код на backend и запросит профиль пользователя.";
-  }
-  switch (session.status) {
-    case "waiting_for_callback":
-      return "Окно авторизации открыто. Подтвердите вход и вернитесь в PostFlow.";
-    case "authorizing":
-      return "Backend обменивает code на токены, проверяет scope и загружает список сообществ.";
-    case "authorized":
-      return "Подключение завершено. Можно выбрать сообщество для дальнейших публикаций.";
-    case "expired":
-      return "VK auth flow истек до завершения. Запустите подключение снова.";
-    case "failed":
-      return "Backend отклонил callback или не смог завершить обмен токена.";
-    case "cancelled":
-      return "Текущий VK flow остановлен.";
-    default:
-      return "";
-  }
-}
-
-function vkSessionToneClasses(status: VkAuthSessionStatus | null | undefined) {
-  if (status === "authorized") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  }
-  if (status === "authorizing") {
-    return "border-amber-200 bg-amber-50 text-amber-900";
-  }
-  if (status === "expired" || status === "failed" || status === "cancelled") {
-    return "border-rose-200 bg-rose-50 text-rose-900";
-  }
-  return "border-sky-200 bg-sky-50 text-sky-900";
 }
 
 function formatSessionTimestamp(value: string | null) {
@@ -352,6 +275,18 @@ function formatSessionTimestamp(value: string | null) {
   });
 }
 
+function buildVkImplicitAuthorizeUrl(clientId: string) {
+  const url = new URL("https://oauth.vk.com/authorize");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("scope", VK_IMPLICIT_SCOPE);
+  url.searchParams.set("redirect_uri", VK_IMPLICIT_REDIRECT_URI);
+  url.searchParams.set("display", "page");
+  url.searchParams.set("response_type", "token");
+  url.searchParams.set("revoke", "1");
+  url.searchParams.set("v", "5.199");
+  return url.toString();
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const [formValues, setFormValues] = useState<SettingsFormValues>(EMPTY_FORM);
@@ -360,9 +295,8 @@ export function SettingsPage() {
   const [telegramSessionId, setTelegramSessionId] = useState<string | null>(() =>
     readStoredTelegramSessionId(),
   );
-  const [vkSessionId, setVkSessionId] = useState<string | null>(() => readStoredVkSessionId());
   const [telegramPassword, setTelegramPassword] = useState("");
-  const [showVkFallback, setShowVkFallback] = useState(false);
+  const [vkTokenInput, setVkTokenInput] = useState("");
   const { pushToast } = useToast();
 
   const settingsQuery = useQuery({
@@ -403,7 +337,9 @@ export function SettingsPage() {
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Не удалось сохранить настройки.";
+        error instanceof Error
+          ? formatBackendErrorMessage(error.message)
+          : "Не удалось сохранить настройки.";
       pushToast({ tone: "error", message });
     },
   });
@@ -430,28 +366,9 @@ export function SettingsPage() {
     },
   });
 
-  const vkSessionQuery = useQuery({
-    queryKey: ["vk-session", vkSessionId],
-    enabled: Boolean(vkSessionId),
-    queryFn: () => apiFetch<VkAuthSessionState>(`/settings/vk/session/${vkSessionId}`),
-    retry: false,
-    refetchInterval: (query) => {
-      const session = query.state.data as VkAuthSessionState | undefined;
-      if (!session) {
-        return 2500;
-      }
-      return ACTIVE_VK_SESSION_STATUSES.has(session.status) ? 2500 : false;
-    },
-  });
-
   function activateTelegramSession(session: TelegramSessionState) {
     setTelegramSessionId(session.session_id);
     queryClient.setQueryData(["telegram-session", session.session_id], session);
-  }
-
-  function activateVkSession(session: VkAuthSessionState) {
-    setVkSessionId(session.session_id);
-    queryClient.setQueryData(["vk-session", session.session_id], session);
   }
 
   async function persistTelegramSettingsIfNeeded() {
@@ -499,7 +416,7 @@ export function SettingsPage() {
     onError: (error) => {
       const message =
         error instanceof Error
-          ? error.message
+          ? formatBackendErrorMessage(error.message)
           : "Не удалось запустить Telegram QR-логин.";
       pushToast({ tone: "error", message });
     },
@@ -528,7 +445,9 @@ export function SettingsPage() {
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Не удалось отправить 2FA-пароль.";
+        error instanceof Error
+          ? formatBackendErrorMessage(error.message)
+          : "Не удалось отправить 2FA-пароль.";
       pushToast({ tone: "error", message });
     },
   });
@@ -556,67 +475,38 @@ export function SettingsPage() {
     onError: (error) => {
       const message =
         error instanceof Error
-          ? error.message
+          ? formatBackendErrorMessage(error.message)
           : "Не удалось остановить Telegram-сессию.";
       pushToast({ tone: "error", message });
     },
   });
 
-  const startVkSessionMutation = useMutation({
+  const connectVkTokenMutation = useMutation({
     mutationFn: async () => {
       await persistVkSettingsIfNeeded();
-      return apiFetch<VkAuthSessionState>("/settings/vk/session", {
+      return apiFetch<VkTokenConnectResponse>("/settings/vk/token", {
         method: "POST",
         body: JSON.stringify({
-          redirect_uri: `${window.location.origin}/settings/vk/callback`,
+          value: vkTokenInput,
         }),
       });
     },
-    onSuccess: (session) => {
-      activateVkSession(session);
-      if (session.authorize_url) {
-        const popup = window.open(
-          session.authorize_url,
-          "postflow-vk-auth",
-          "popup=yes,width=720,height=820,resizable=yes,scrollbars=yes",
-        );
-        if (popup) {
-          popup.focus();
-        } else {
-          window.location.assign(session.authorize_url);
-        }
-      }
+    onSuccess: (data) => {
+      syncSettingsState(data.settings);
+      queryClient.setQueryData(["vk-communities"], {
+        communities: data.communities,
+      } satisfies VkCommunitiesResponse);
+      setVkTokenInput("");
       pushToast({
         tone: "success",
-        message: "VK auth flow запущен. Завершите вход в открывшемся окне.",
+        message: "VK токен проверен и сохранен. Можно выбрать рабочее сообщество.",
       });
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Не удалось запустить VK-подключение.";
-      pushToast({ tone: "error", message });
-    },
-  });
-
-  const cancelVkSessionMutation = useMutation({
-    mutationFn: async () => {
-      if (!vkSessionId) {
-        throw new Error("Нет активной VK-сессии.");
-      }
-      return apiFetch<VkAuthSessionState>(`/settings/vk/session/${vkSessionId}`, {
-        method: "DELETE",
-      });
-    },
-    onSuccess: (session) => {
-      activateVkSession(session);
-      pushToast({
-        tone: "warning",
-        message: "VK auth flow остановлен.",
-      });
-    },
-    onError: (error) => {
-      const message =
-        error instanceof Error ? error.message : "Не удалось остановить VK-сессию.";
+        error instanceof Error
+          ? formatBackendErrorMessage(error.message)
+          : "Не удалось подключить VK токен.";
       pushToast({ tone: "error", message });
     },
   });
@@ -628,8 +518,7 @@ export function SettingsPage() {
       }),
     onSuccess: (data) => {
       syncSettingsState(data);
-      setVkSessionId(null);
-      writeStoredVkSessionId(null);
+      setVkTokenInput("");
       void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
       pushToast({
         tone: "warning",
@@ -638,7 +527,9 @@ export function SettingsPage() {
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Не удалось отключить VK.";
+        error instanceof Error
+          ? formatBackendErrorMessage(error.message)
+          : "Не удалось отключить VK.";
       pushToast({ tone: "error", message });
     },
   });
@@ -662,7 +553,9 @@ export function SettingsPage() {
     },
     onError: (error) => {
       const message =
-        error instanceof Error ? error.message : "Не удалось сохранить VK-сообщество.";
+        error instanceof Error
+          ? formatBackendErrorMessage(error.message)
+          : "Не удалось сохранить VK-сообщество.";
       pushToast({ tone: "error", message });
     },
   });
@@ -677,32 +570,24 @@ export function SettingsPage() {
   const telegramSession = telegramSessionId
     ? (telegramSessionQuery.data ?? null)
     : null;
-  const vkSession = vkSessionId ? (vkSessionQuery.data ?? null) : null;
   const telegramQrExpiresAt = formatSessionTimestamp(
     telegramSession?.expires_at ?? null,
   );
-  const vkFlowExpiresAt = formatSessionTimestamp(vkSession?.expires_at ?? null);
   const vkTokenExpiresAt = formatSessionTimestamp(
     settingsQuery.data?.vk_token_expires_at ?? null,
   );
   const isTelegramSessionActive =
     telegramSession !== null &&
     ACTIVE_TELEGRAM_SESSION_STATUSES.has(telegramSession.status);
-  const isVkSessionActive =
-    vkSession !== null && ACTIVE_VK_SESSION_STATUSES.has(vkSession.status);
   const isTelegramActionPending =
     startTelegramSessionMutation.isPending ||
     submitTelegramPasswordMutation.isPending ||
     cancelTelegramSessionMutation.isPending;
   const isVkActionPending =
-    startVkSessionMutation.isPending ||
-    cancelVkSessionMutation.isPending ||
+    connectVkTokenMutation.isPending ||
     disconnectVkMutation.isPending ||
     saveVkCommunityMutation.isPending;
-  const vkCommunities =
-    vkSession?.communities.length
-      ? vkSession.communities
-      : (vkCommunitiesQuery.data?.communities ?? []);
+  const vkCommunities = vkCommunitiesQuery.data?.communities ?? [];
   const selectedVkCommunity = vkCommunities.find(
     (community) => community.group_id === formValues.vk_group_id,
   );
@@ -734,6 +619,42 @@ export function SettingsPage() {
       vk_group_id: groupId,
       vk_group_name: selected?.name ?? "",
     }));
+  }
+
+  async function handleOpenVkOauth() {
+    const clientId = formValues.vk_client_id.trim();
+    if (!clientId) {
+      pushToast({
+        tone: "error",
+        message: "Сначала укажите VK App ID standalone-приложения.",
+      });
+      return;
+    }
+
+    try {
+      await persistVkSettingsIfNeeded();
+    } catch {
+      return;
+    }
+
+    const authorizeUrl = buildVkImplicitAuthorizeUrl(clientId);
+    const popup = window.open(
+      authorizeUrl,
+      "postflow-vk-token",
+      "popup=yes,width=720,height=820,resizable=yes,scrollbars=yes",
+    );
+
+    if (popup) {
+      popup.focus();
+    } else {
+      window.location.assign(authorizeUrl);
+    }
+
+    pushToast({
+      tone: "success",
+      message:
+        "VK OAuth открыт. После входа вставьте URL из blank.html или сам access token обратно в форму.",
+    });
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -791,51 +712,6 @@ export function SettingsPage() {
       setTelegramPassword("");
     }
   }, [telegramSession?.status]);
-
-  useEffect(() => {
-    if (!vkSessionId) {
-      writeStoredVkSessionId(null);
-      return;
-    }
-
-    if (!vkSession) {
-      writeStoredVkSessionId(vkSessionId);
-      return;
-    }
-
-    if (FINAL_VK_SESSION_STATUSES.has(vkSession.status)) {
-      writeStoredVkSessionId(null);
-      return;
-    }
-
-    writeStoredVkSessionId(vkSession.session_id);
-  }, [vkSession, vkSessionId]);
-
-  useEffect(() => {
-    if (!vkSessionQuery.error || !vkSessionId) {
-      return;
-    }
-
-    setVkSessionId(null);
-    writeStoredVkSessionId(null);
-    pushToast({
-      tone: "warning",
-      message: "Backend не нашел активный VK auth flow. Запустите подключение снова.",
-    });
-  }, [pushToast, vkSessionId, vkSessionQuery.error]);
-
-  useEffect(() => {
-    if (vkSession?.status !== "authorized") {
-      return;
-    }
-
-    void queryClient.invalidateQueries({ queryKey: ["settings"] });
-    void queryClient.invalidateQueries({ queryKey: ["vk-communities"] });
-    pushToast({
-      tone: "success",
-      message: "VK-аккаунт подключен. Можно выбрать рабочее сообщество.",
-    });
-  }, [pushToast, queryClient, vkSession?.status]);
 
   return (
     <div className="space-y-6">
@@ -1123,7 +999,7 @@ export function SettingsPage() {
               </p>
             </div>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <div className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <label className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
                 <span className="text-sm font-medium text-slate-700">
                   VK App ID
@@ -1137,6 +1013,9 @@ export function SettingsPage() {
                     setFieldValue("vk_client_id", event.target.value)
                   }
                 />
+                <p className="text-sm leading-6 text-slate-500">
+                  Для текущего helper flow нужен только App ID standalone-приложения.
+                </p>
               </label>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
@@ -1170,17 +1049,20 @@ export function SettingsPage() {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-sky-200/80">
-                    VK Session
+                    VK Helper
                   </p>
                   <h4 className="mt-2 text-xl font-semibold">
-                    OAuth-подключение аккаунта
+                    Получение publish-capable токена
                   </h4>
                   <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
-                    {describeVkSession(vkSession)}
+                    Откройте VK OAuth с `response_type=token`, войдите в аккаунт и
+                    вставьте сюда итоговый URL из `oauth.vk.com/blank.html#...`
+                    или сам `access_token`. Backend проверит права
+                    `wall/photos/groups`, сохранит токен и загрузит сообщества.
                   </p>
                   {isVkDirty ? (
                     <p className="mt-3 text-xs uppercase tracking-[0.2em] text-amber-200">
-                      Перед запуском будут сохранены измененные VK-поля.
+                      Перед открытием helper будут сохранены измененные VK-поля.
                     </p>
                   ) : null}
                 </div>
@@ -1193,33 +1075,16 @@ export function SettingsPage() {
                       settingsQuery.isLoading ||
                       updateMutation.isPending ||
                       isVkActionPending ||
-                      isVkSessionActive
+                      formValues.vk_client_id.trim().length === 0
                     }
                     onClick={() => {
-                      void startVkSessionMutation.mutateAsync();
+                      void handleOpenVkOauth();
                     }}
                   >
-                    {startVkSessionMutation.isPending
-                      ? "Запускаем…"
-                      : settingsQuery.data?.vk_auth_status === "connected"
-                        ? "Переподключить VK"
-                        : "Подключить VK"}
+                    {settingsQuery.data?.vk_auth_status === "connected"
+                      ? "Открыть VK OAuth снова"
+                      : "Открыть VK OAuth"}
                   </button>
-
-                  {vkSession ? (
-                    <button
-                      type="button"
-                      className="inline-flex items-center justify-center rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/40 hover:bg-white/15 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-slate-400"
-                      disabled={!isVkSessionActive || cancelVkSessionMutation.isPending}
-                      onClick={() => {
-                        void cancelVkSessionMutation.mutateAsync();
-                      }}
-                    >
-                      {cancelVkSessionMutation.isPending
-                        ? "Останавливаем…"
-                        : "Остановить flow"}
-                    </button>
-                  ) : null}
 
                   {settingsQuery.data?.vk_auth_status !== "not_connected" ? (
                     <button
@@ -1240,46 +1105,51 @@ export function SettingsPage() {
 
               <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.1fr)_320px]">
                 <div className="space-y-4">
-                  <div
-                    className={[
-                      "rounded-3xl border px-4 py-4 shadow-sm",
-                      vkSessionToneClasses(vkSession?.status),
-                    ].join(" ")}
-                  >
-                    <p className="text-xs uppercase tracking-[0.24em] opacity-70">
-                      Статус
+                  <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                    <p className="text-sm font-medium text-white">
+                      Импорт URL или токена
                     </p>
-                    <p className="mt-2 text-lg font-semibold">
-                      {formatVkSessionStatus(vkSession?.status)}
+                    <p className="mt-2 text-sm leading-6 text-slate-300">
+                      Вставьте полную ссылку из адресной строки после редиректа на
+                      `blank.html` или уже извлеченный `access_token`.
                     </p>
 
-                    {vkSession?.account_label ? (
-                      <p className="mt-2 text-sm leading-6">
-                        Авторизованный аккаунт:{" "}
-                        <span className="font-semibold">
-                          {vkSession.account_label}
-                        </span>
-                      </p>
-                    ) : null}
+                    <textarea
+                      className="mt-4 min-h-[132px] w-full rounded-2xl border border-white/15 bg-slate-950/60 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-sky-400"
+                      value={vkTokenInput}
+                      placeholder="https://oauth.vk.com/blank.html#access_token=... или vk1.a...."
+                      onChange={(event) => {
+                        setVkTokenInput(event.target.value);
+                      }}
+                    />
 
-                    {vkFlowExpiresAt ? (
-                      <p className="mt-2 text-sm leading-6">
-                        Flow истекает:{" "}
-                        <span className="font-semibold">{vkFlowExpiresAt}</span>
-                      </p>
-                    ) : null}
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-full bg-sky-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-300"
+                        disabled={
+                          vkTokenInput.trim().length === 0 ||
+                          connectVkTokenMutation.isPending
+                        }
+                        onClick={() => {
+                          void connectVkTokenMutation.mutateAsync();
+                        }}
+                      >
+                        {connectVkTokenMutation.isPending
+                          ? "Проверяем токен…"
+                          : "Подключить токен"}
+                      </button>
 
-                    {vkSessionQuery.isFetching && vkSessionId ? (
-                      <p className="mt-2 text-sm leading-6 opacity-80">
-                        Перечитываем VK-статус из backend…
-                      </p>
-                    ) : null}
-
-                    {vkSession?.error ? (
-                      <p className="mt-3 rounded-2xl border border-current/15 bg-white/60 px-3 py-3 text-sm leading-6">
-                        {vkSession.error}
-                      </p>
-                    ) : null}
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:border-white/40 hover:bg-white/15"
+                        onClick={() => {
+                          setVkTokenInput("");
+                        }}
+                      >
+                        Очистить поле
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -1369,66 +1239,24 @@ export function SettingsPage() {
 
                 <div className="rounded-3xl border border-white/10 bg-white/95 p-4 shadow-sm">
                   <p className="text-sm font-medium text-slate-700">
-                    VK callback и диагностика
+                    Параметры helper flow
                   </p>
                   <p className="mt-3 text-sm leading-6 text-slate-600">
-                    Redirect URI рассчитывается от текущего origin и должен быть
-                    зарегистрирован в VK как
-                    `http://localhost:3000/settings/vk/callback` или
-                    `http://127.0.0.1:3000/settings/vk/callback`.
+                    Открываем standalone OAuth с `redirect_uri=https://oauth.vk.com/blank.html`,
+                    `response_type=token` и scope `wall,photos,groups,offline`.
+                    Для publish-capable токена ожидаем permission bitmask `335876`.
                   </p>
-                  <button
-                    type="button"
-                    className="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                    onClick={() => {
-                      setShowVkFallback((current) => !current);
-                    }}
-                  >
-                    {showVkFallback ? "Скрыть fallback" : "Advanced fallback"}
-                  </button>
-
-                  {showVkFallback ? (
-                    <div className="mt-4 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <label className="flex flex-col gap-2">
-                        <span className="text-sm font-medium text-slate-700">
-                          Ручной VK access token
-                        </span>
-                        <div className="flex gap-2">
-                          <input
-                            className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500"
-                            type={visibility.vk_access_token ? "text" : "password"}
-                            value={formValues.vk_access_token}
-                            placeholder="vk1.a...."
-                            onChange={(event) =>
-                              setFieldValue("vk_access_token", event.target.value)
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
-                            onClick={() => toggleVisibility("vk_access_token")}
-                          >
-                            {visibility.vk_access_token ? "Скрыть" : "Показать"}
-                          </button>
-                        </div>
-                      </label>
-
-                      <label className="flex flex-col gap-2">
-                        <span className="text-sm font-medium text-slate-700">
-                          Ручной VK group ID
-                        </span>
-                        <input
-                          className="min-w-0 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-sky-500"
-                          type="text"
-                          value={formValues.vk_group_id}
-                          placeholder="123456"
-                          onChange={(event) =>
-                            setFieldValue("vk_group_id", event.target.value)
-                          }
-                        />
-                      </label>
-                    </div>
-                  ) : null}
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                    <p>
+                      1. Нажмите `Открыть VK OAuth`.
+                    </p>
+                    <p className="mt-2">
+                      2. После логина скопируйте адрес из `blank.html`.
+                    </p>
+                    <p className="mt-2">
+                      3. Вставьте адрес сюда, а PostFlow сам достанет `access_token`.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

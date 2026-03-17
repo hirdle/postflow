@@ -5,6 +5,7 @@ import { apiFetch } from "../api/client";
 import type { VkAuthSessionState } from "../types";
 
 const VK_SESSION_STORAGE_KEY = "postflow:vk-session-id";
+const pendingVkExchangeKeys = new Set<string>();
 
 type CallbackState =
   | { status: "loading"; message: string }
@@ -25,6 +26,29 @@ function clearVkSessionId() {
   window.localStorage.removeItem(VK_SESSION_STORAGE_KEY);
 }
 
+function readVkCallbackParam(url: URL, key: string) {
+  const searchValue = url.searchParams.get(key);
+  if (searchValue !== null) {
+    return searchValue;
+  }
+
+  const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+  if (!hash) {
+    return null;
+  }
+
+  return new URLSearchParams(hash).get(key);
+}
+
+function readVkSessionIdFromState(state: string | null) {
+  if (!state) {
+    return null;
+  }
+
+  const sessionId = state.split(".")[0] ?? "";
+  return /^[a-f0-9]{32}$/i.test(sessionId) ? sessionId : null;
+}
+
 export function VkAuthCallbackPage() {
   const navigate = useNavigate();
   const [callbackState, setCallbackState] = useState<CallbackState>({
@@ -37,8 +61,13 @@ export function VkAuthCallbackPage() {
 
     async function finalizeVkAuth() {
       const url = new URL(window.location.href);
-      const searchParams = url.searchParams;
-      const sessionId = searchParams.get("session_id") ?? readVkSessionId();
+      const state = readVkCallbackParam(url, "state");
+      const code = readVkCallbackParam(url, "code");
+      const accessToken = readVkCallbackParam(url, "access_token");
+      const sessionId =
+        readVkCallbackParam(url, "session_id") ??
+        readVkSessionId() ??
+        readVkSessionIdFromState(state);
 
       if (!sessionId) {
         setCallbackState({
@@ -49,19 +78,27 @@ export function VkAuthCallbackPage() {
         return;
       }
 
+      const exchangeKey = [sessionId, state ?? "", code ?? "", accessToken ?? ""].join(":");
+      if (pendingVkExchangeKeys.has(exchangeKey)) {
+        return;
+      }
+      pendingVkExchangeKeys.add(exchangeKey);
+
       try {
         const session = await apiFetch<VkAuthSessionState>(
           `/settings/vk/session/${sessionId}/exchange`,
           {
             method: "POST",
             body: JSON.stringify({
-              payload: searchParams.get("payload"),
-              code: searchParams.get("code"),
-              state: searchParams.get("state"),
-              device_id: searchParams.get("device_id"),
-              type: searchParams.get("type"),
-              error: searchParams.get("error"),
-              error_description: searchParams.get("error_description"),
+              payload: readVkCallbackParam(url, "payload"),
+              access_token: accessToken,
+              expires_in: readVkCallbackParam(url, "expires_in"),
+              code,
+              state,
+              user_id: readVkCallbackParam(url, "user_id"),
+              scope: readVkCallbackParam(url, "scope"),
+              error: readVkCallbackParam(url, "error"),
+              error_description: readVkCallbackParam(url, "error_description"),
             }),
           },
         );

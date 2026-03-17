@@ -33,13 +33,19 @@ VK_AUTH_SETTINGS_KEYS = (
 )
 VK_API_VERSION = "5.199"
 VK_API_BASE = "https://api.vk.com/method"
-VK_ID_AUTHORIZE_BASE = "https://id.vk.ru/authorize"
+VK_OAUTH_AUTHORIZE_BASE = "https://oauth.vk.com/authorize"
+VK_OAUTH_TOKEN_URL = "https://oauth.vk.com/access_token"
 VK_ID_OAUTH_BASE = "https://id.vk.ru/oauth2"
 VK_ID_TOKEN_URL = f"{VK_ID_OAUTH_BASE}/auth"
 VK_ID_LOGOUT_URL = f"{VK_ID_OAUTH_BASE}/logout"
-VK_ID_USER_INFO_URL = f"{VK_ID_OAUTH_BASE}/user_info"
 VK_REQUIRED_SCOPES = frozenset({"wall", "photos", "groups"})
 VK_OPTIONAL_SCOPES = frozenset({"offline"})
+VK_PERMISSION_BITS = {
+    "photos": 4,
+    "wall": 8192,
+    "offline": 65536,
+    "groups": 262144,
+}
 MSK = timezone(timedelta(hours=3))
 
 
@@ -250,17 +256,12 @@ class VKClient:
         )
 
     async def get_profile(self) -> VKUserProfile:
-        payload = await self._http.post(
-            VK_ID_USER_INFO_URL,
-            data={
-                "access_token": self.access_token,
-                "client_id": self.client_id or "",
-            },
-        )
-        payload.raise_for_status()
-        data = payload.json()
-        user = data.get("user", {})
-        user_id = str(user.get("user_id") or "").strip()
+        payload = await self._call("users.get")
+        if not isinstance(payload, list) or not payload:
+            raise RuntimeError("VK auth succeeded but user profile is incomplete.")
+
+        user = payload[0]
+        user_id = str(user.get("id") or "").strip()
         if not user_id:
             raise RuntimeError("VK auth succeeded but user profile is incomplete.")
 
@@ -270,6 +271,35 @@ class VKClient:
             last_name=_normalize_optional_value(user.get("last_name")),
             email=_normalize_optional_value(user.get("email")),
         )
+
+    async def get_app_permissions(self) -> int:
+        permissions = await self._call("account.getAppPermissions")
+        try:
+            return int(permissions)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("VK did not return a valid app permissions bitmask.") from exc
+
+    async def ensure_required_permissions(self) -> str:
+        granted = _parse_scope(self.token_scope)
+        if VK_REQUIRED_SCOPES.issubset(granted):
+            normalized = _serialize_scope(granted)
+            self.token_scope = normalized
+            return normalized or ""
+
+        permissions = await self.get_app_permissions()
+        granted.update(_scopes_from_permissions(permissions))
+        self.token_scope = _serialize_scope(granted)
+
+        missing_scopes = VK_REQUIRED_SCOPES.difference(granted)
+        if missing_scopes:
+            granted_scope = self.token_scope or "<none>"
+            raise RuntimeError(
+                "VK token is missing required scopes: "
+                + ", ".join(sorted(missing_scopes))
+                + f". Granted scopes: {granted_scope}. Permissions bitmask: {permissions}."
+            )
+
+        return self.token_scope or ""
 
     async def list_communities(self) -> list[VKCommunity]:
         communities: dict[str, VKCommunity] = {}
@@ -403,7 +433,7 @@ class VKClient:
         return True
 
     async def logout(self) -> None:
-        if not self.client_id or not self.access_token:
+        if not self.client_id or not self.access_token or not (self.refresh_token or self.device_id):
             return
 
         response = await self._http.post(
@@ -467,7 +497,7 @@ class VKClient:
         method: str,
         _retry_on_refresh: bool = True,
         **params: object,
-    ) -> dict[str, Any]:
+    ) -> Any:
         if self._should_refresh_before_request():
             await self.refresh_access_token()
 
@@ -490,7 +520,7 @@ class VKClient:
             return await self._call(method, _retry_on_refresh=False, **params)
 
         if _is_refreshable_auth_error(error):
-            raise RuntimeError("VK token refresh failed. Reconnect VK in settings.")
+            raise RuntimeError("VK access token is invalid or expired. Reconnect VK in settings.")
 
         raise RuntimeError(f"VK API error: {error.get('error_msg', error)}")
 
@@ -531,6 +561,28 @@ def _normalize_optional_value(value: object) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _parse_scope(scope: str | None) -> set[str]:
+    normalized = _normalize_optional_value(scope)
+    if normalized is None:
+        return set()
+    replaced = normalized.replace(",", " ")
+    return {part.strip() for part in replaced.split() if part.strip()}
+
+
+def _serialize_scope(scopes: set[str]) -> str | None:
+    if not scopes:
+        return None
+    return " ".join(sorted(scopes))
+
+
+def _scopes_from_permissions(permissions: int) -> set[str]:
+    return {
+        scope
+        for scope, bit in VK_PERMISSION_BITS.items()
+        if permissions & bit
+    }
 
 
 def _parse_optional_datetime(value: str | None) -> datetime | None:

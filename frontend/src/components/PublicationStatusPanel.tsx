@@ -1,7 +1,10 @@
 import { PlatformBadge } from "./PlatformBadge";
 import { PresenceBadge } from "./PresenceBadge";
 import { StatusBadge } from "./StatusBadge";
-import { formatBackendErrorMessage } from "../lib/errors";
+import {
+  formatBackendErrorMessage,
+  isSettingsConfigurationErrorMessage,
+} from "../lib/errors";
 import { formatScheduleValue, formatTimestampValue } from "../lib/format";
 import type {
   PublishAttempt,
@@ -126,7 +129,10 @@ function buildErrorJournal(
   publishAttempts: PublishAttempt[],
 ) {
   const recordErrors = publishRecords
-    .filter((record) => record.error)
+    .filter(
+      (record) =>
+        record.error && !isSettingsConfigurationErrorMessage(record.error),
+    )
     .map((record) => ({
       id: `record-${record.id ?? record.created_at ?? record.file_name}`,
       title: `${formatPlatform(record.platform)} • ${formatStatusValue(record.status)}`,
@@ -138,6 +144,19 @@ function buildErrorJournal(
     .map((attempt) => ({
       attempt,
       meta: parseAttemptMeta(attempt),
+    }))
+    .map(({ attempt, meta }) => ({
+      attempt,
+      meta: {
+        ...meta,
+        error:
+          meta.error && !isSettingsConfigurationErrorMessage(meta.error)
+            ? meta.error
+            : null,
+        issues: meta.issues.filter(
+          (issue) => !isSettingsConfigurationErrorMessage(issue),
+        ),
+      },
     }))
     .filter(({ meta }) => meta.error || meta.issues.length > 0)
     .map(({ attempt, meta }) => ({
@@ -293,12 +312,13 @@ export function PublicationStatusPanel({
                           <p className="text-xs uppercase tracking-[0.16em] text-slate-500">
                             Слот
                           </p>
-                          <p className="mt-1 text-sm text-slate-900">
-                            {formatSchedule(record)}
-                          </p>
-                        </div>
-                      </div>
-                      {record.error ? (
+                      <p className="mt-1 text-sm text-slate-900">
+                        {formatSchedule(record)}
+                      </p>
+                    </div>
+                  </div>
+                      {record.error &&
+                      !isSettingsConfigurationErrorMessage(record.error) ? (
                         <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
                           {formatBackendErrorMessage(record.error)}
                         </div>
@@ -330,6 +350,14 @@ export function PublicationStatusPanel({
                 <div className="mt-4 space-y-3">
                   {publishAttempts.map((attempt) => {
                     const meta = parseAttemptMeta(attempt);
+                    const displayError =
+                      meta.error &&
+                      !isSettingsConfigurationErrorMessage(meta.error)
+                        ? meta.error
+                        : null;
+                    const displayIssues = meta.issues.filter(
+                      (issue) => !isSettingsConfigurationErrorMessage(issue),
+                    );
 
                     return (
                       <article
@@ -347,14 +375,14 @@ export function PublicationStatusPanel({
                         <p className="mt-2 text-sm text-slate-500">
                           {formatTimestamp(attempt.created_at)}
                         </p>
-                        {meta.error ? (
+                        {displayError ? (
                           <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
-                            {formatBackendErrorMessage(meta.error)}
+                            {formatBackendErrorMessage(displayError)}
                           </div>
                         ) : null}
-                        {meta.issues.length > 0 ? (
+                        {displayIssues.length > 0 ? (
                           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                            {meta.issues.map(formatBackendErrorMessage).join("; ")}
+                            {displayIssues.map(formatBackendErrorMessage).join("; ")}
                           </div>
                         ) : null}
                       </article>
