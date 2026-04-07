@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import FileResponse
+from openai import APIStatusError, RateLimitError
 
 from app.config import get_settings
 from app.core.media import ImageService, MediaStorage
@@ -18,6 +20,7 @@ from app.schemas.media import (
 )
 
 router = APIRouter(prefix="/media", tags=["media"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/models", response_model=list[MediaModelInfo])
@@ -27,7 +30,29 @@ async def list_media_models() -> list[MediaModelInfo]:
             models = await client.list_models()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RateLimitError as exc:
+        detail = _extract_upstream_error_detail(
+            exc,
+            "Image model listing is temporarily rate limited by the upstream API.",
+        )
+        logger.warning("Image model listing rate limited: %s", detail)
+        raise HTTPException(status_code=429, detail=detail) from exc
+    except APIStatusError as exc:
+        detail = _extract_upstream_error_detail(
+            exc,
+            "Failed to load image models from the upstream API.",
+        )
+        logger.warning(
+            "Image model listing upstream error (status=%s): %s",
+            exc.response.status_code,
+            detail,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=detail,
+        ) from exc
     except Exception as exc:
+        logger.exception("Image model listing failed.")
         raise HTTPException(
             status_code=502,
             detail="Failed to load image models from the upstream API.",
@@ -77,7 +102,31 @@ async def generate_media(payload: MediaGenerateRequest) -> MediaGenerateResponse
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RateLimitError as exc:
+        detail = _extract_upstream_error_detail(
+            exc,
+            "Image generation is temporarily rate limited by the upstream API.",
+        )
+        logger.warning(
+            "Image generation rate limited for %s: %s",
+            normalized_file_name,
+            detail,
+        )
+        raise HTTPException(status_code=429, detail=detail) from exc
+    except APIStatusError as exc:
+        detail = _extract_upstream_error_detail(exc, "Image generation failed.")
+        logger.warning(
+            "Image generation upstream error for %s (status=%s): %s",
+            normalized_file_name,
+            exc.response.status_code,
+            detail,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=detail,
+        ) from exc
     except Exception as exc:
+        logger.exception("Image generation failed for %s.", normalized_file_name)
         raise HTTPException(
             status_code=502,
             detail="Image generation failed.",
@@ -145,3 +194,20 @@ def _format_image_path(path: Path) -> str:
         return str(path.relative_to(settings.project_root))
     except ValueError:
         return str(path)
+
+
+def _extract_upstream_error_detail(exc: Exception, fallback: str) -> str:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            message = error.get("message") or error.get("error_msg")
+            if isinstance(message, str) and message.strip():
+                return " ".join(message.split())
+
+        message = body.get("message")
+        if isinstance(message, str) and message.strip():
+            return " ".join(message.split())
+
+    message = " ".join(str(exc).split())
+    return message or fallback

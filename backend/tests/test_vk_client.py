@@ -128,6 +128,18 @@ class InvalidTokenHttpClient:
         )
 
 
+class InternalServerErrorHttpClient:
+    async def post(self, url: str, data=None, files=None):  # noqa: ANN001
+        return FakeResponse(
+            {
+                "error": {
+                    "error_code": 1,
+                    "error_msg": "Internal server error",
+                }
+            }
+        )
+
+
 class VKClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_access_token_persists_new_credentials_and_retries_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,3 +243,16 @@ class VKClientTests(unittest.IsolatedAsyncioTestCase):
             "VK access token is invalid or expired. Reconnect VK in settings.",
         ):
             await client.get_app_permissions()
+
+    async def test_vk_api_errors_include_method_name_and_code(self) -> None:
+        client = VKClient(
+            access_token="vk-token",
+            group_id="77",
+            http_client=InternalServerErrorHttpClient(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"VK API error in wall\.post \(code 1\): Internal server error",
+        ):
+            await client.wall_post("hello")

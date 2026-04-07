@@ -522,7 +522,13 @@ class VKClient:
         if _is_refreshable_auth_error(error):
             raise RuntimeError("VK access token is invalid or expired. Reconnect VK in settings.")
 
-        raise RuntimeError(f"VK API error: {error.get('error_msg', error)}")
+        error_message = " ".join(str(error.get("error_msg", error)).split())
+        error_code = error.get("error_code")
+        if error_code is not None:
+            raise RuntimeError(
+                f"VK API error in {method} (code {error_code}): {error_message}"
+            )
+        raise RuntimeError(f"VK API error in {method}: {error_message}")
 
     def _require_group_id(self) -> str:
         if not self.group_id:

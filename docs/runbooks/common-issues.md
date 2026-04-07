@@ -91,6 +91,7 @@ Checks:
 - confirm `image_api_key`, `image_base_url`, and optional default model in settings
 - remember model listing and generation can fail independently
 - confirm the draft is already saved before upload/generate
+- if the backend returns an upstream rate-limit message, wait and retry after the provider cooldown window instead of retrying immediately several times in a row
 
 ## Scheduled Publish Cannot Be Cancelled Or Rescheduled
 
